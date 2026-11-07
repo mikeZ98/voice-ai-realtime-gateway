@@ -1,0 +1,154 @@
+[project]
+name = "voice-ai-realtime-gateway"
+version = "0.1.0"
+description = "Ultra-low-latency full-duplex voice agent gateway: realtime session state machine, bounded zero-copy audio rings, and typed telemetry."
+readme = "README.md"
+authors = [
+    { name = "mikeZ98", email = "145975972+mikeZ98@users.noreply.github.com" }
+]
+requires-python = ">=3.12"
+classifiers = [
+    "Framework :: AsyncIO",
+    "Programming Language :: Python :: 3 :: Only",
+    "Programming Language :: Python :: 3.12",
+    "Typing :: Typed",
+]
+dependencies = []
+
+[dependency-groups]
+dev = [
+    "bandit[toml]>=1.8",
+    "hypothesis>=6.130",
+    "mypy>=1.15",
+    "pytest>=8.3",
+    "pytest-asyncio>=1.0",
+    "pytest-cov>=6.1",
+    "pytest-socket>=0.7",
+    "ruff>=0.11",
+]
+
+[build-system]
+requires = ["uv_build>=0.11.7,<0.12.0"]
+build-backend = "uv_build"
+
+# --------------------------------------------------------------------------- #
+# uv: every cache lives under ./.cache/
+# --------------------------------------------------------------------------- #
+[tool.uv]
+cache-dir = ".cache/uv"
+
+# --------------------------------------------------------------------------- #
+# Ruff: every rule family enabled; each ignore below is a documented conflict.
+# --------------------------------------------------------------------------- #
+[tool.ruff]
+cache-dir = ".cache/ruff"
+target-version = "py312"
+line-length = 100
+src = ["src", "tests"]
+
+[tool.ruff.lint]
+select = ["ALL"]
+ignore = [
+    "COM812", # conflicts with `ruff format` (trailing commas are formatter-owned)
+    "CPY001", # no per-file license headers: licensing is declared once in project metadata
+    "D203",   # incompatible with D211 (no blank line before class docstring)
+    "D213",   # incompatible with D212 (summary on first docstring line)
+]
+
+[tool.ruff.lint.per-file-ignores]
+"tests/**/*.py" = [
+    "D",       # test names are the documentation
+    "INP001",  # tests are rootless modules by design (--import-mode=importlib)
+    "S101",    # pytest is built on `assert`
+    "PLR2004", # literal expectations are the point of a contract test
+    "SLF001",  # white-box invariants are asserted on private state
+]
+
+[tool.ruff.lint.pydocstyle]
+convention = "google"
+
+[tool.ruff.lint.flake8-pytest-style]
+fixture-parentheses = false
+mark-parentheses = false
+
+[tool.ruff.lint.isort]
+known-first-party = ["voice_ai_realtime_gateway"]
+
+[tool.ruff.format]
+docstring-code-format = true
+
+# --------------------------------------------------------------------------- #
+# mypy
+# --------------------------------------------------------------------------- #
+[tool.mypy]
+cache_dir = ".cache/mypy"
+python_version = "3.12"
+strict = true
+warn_unreachable = true
+enable_error_code = [
+    "ignore-without-code",
+    "redundant-cast",
+    "redundant-expr",
+    "possibly-undefined",
+    "truthy-bool",
+    "truthy-iterable",
+    "unused-awaitable",
+    "explicit-override",
+]
+mypy_path = "src"
+files = ["src", "tests"]
+
+# --------------------------------------------------------------------------- #
+# pytest: network-free, warning-free, 100 % line + branch coverage.
+# --------------------------------------------------------------------------- #
+[tool.pytest.ini_options]
+cache_dir = ".cache/pytest"
+minversion = "8.3"
+testpaths = ["tests"]
+pythonpath = ["tests"] # shared test doubles (tests/*_support.py)
+addopts = [
+    "-ra",
+    "--strict-config",
+    "--strict-markers",
+    "--import-mode=importlib",
+    "--disable-socket",
+    "--allow-unix-socket", # asyncio's self-pipe is an AF_UNIX socketpair; no AF_INET/AF_INET6
+    "--cov=voice_ai_realtime_gateway",
+    "--cov-branch",
+    "--cov-report=term-missing:skip-covered",
+    "--cov-fail-under=100",
+]
+asyncio_mode = "auto"
+asyncio_default_fixture_loop_scope = "function"
+asyncio_default_test_loop_scope = "function"
+xfail_strict = true
+filterwarnings = ["error"]
+
+# --------------------------------------------------------------------------- #
+# coverage
+# --------------------------------------------------------------------------- #
+[tool.coverage.run]
+data_file = ".cache/coverage/.coverage"
+branch = true
+source = ["voice_ai_realtime_gateway"]
+
+[tool.coverage.report]
+precision = 2
+fail_under = 100
+show_missing = true
+skip_covered = false
+exclude_also = [
+    "if TYPE_CHECKING:",
+]
+
+[tool.coverage.json]
+output = ".cache/coverage/coverage.json"
+
+[tool.coverage.html]
+directory = ".cache/coverage/html"
+
+# --------------------------------------------------------------------------- #
+# bandit
+# --------------------------------------------------------------------------- #
+[tool.bandit]
+exclude_dirs = [".cache", ".venv", "tests"]
