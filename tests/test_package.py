@@ -13,6 +13,7 @@ PUBLIC_PACKAGES = (
     "voice_ai_realtime_gateway.core",
     "voice_ai_realtime_gateway.domain",
     "voice_ai_realtime_gateway.telemetry",
+    "voice_ai_realtime_gateway.transport",
     "voice_ai_realtime_gateway.vad",
 )
 
