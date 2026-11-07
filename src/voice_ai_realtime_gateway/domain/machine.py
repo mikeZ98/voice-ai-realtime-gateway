@@ -9,6 +9,8 @@ Guarantees (asserted by the contract and fuzz suites):
    remote ``observed`` timestamps.
 4. ``TERMINATED`` is absorbing.
 5. Memory is O(``history_size``) for the life of the session.
+6. The optional ``on_transition`` listener observes every committed transition, in
+   commit order, after its telemetry event. It must not raise.
 
 Concurrency model: :meth:`SessionStateMachine.fire` is synchronous and never awaits, so
 each transition is atomic with respect to every other coroutine on the loop.
@@ -18,6 +20,7 @@ from __future__ import annotations
 
 import time
 from collections import deque
+from collections.abc import Callable
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, final, override
 
@@ -38,7 +41,7 @@ if TYPE_CHECKING:
     from voice_ai_realtime_gateway.telemetry.ids import TraceContext
     from voice_ai_realtime_gateway.telemetry.sink import TelemetrySink
 
-__all__ = ["SessionStateMachine", "Transition"]
+__all__ = ["SessionStateMachine", "Transition", "TransitionListener"]
 
 
 @dataclass(frozen=True, slots=True, kw_only=True)
@@ -54,13 +57,25 @@ class Transition:
     drain_reason: DrainReason | None
 
 
+type TransitionListener = Callable[[Transition], None]
+
+
 @final
 class SessionStateMachine:
     """Formal full-duplex session lifecycle."""
 
-    __slots__ = ("_clock", "_drain_reason", "_history", "_lamport", "_sink", "_state", "_trace")
+    __slots__ = (
+        "_clock",
+        "_drain_reason",
+        "_history",
+        "_lamport",
+        "_listener",
+        "_sink",
+        "_state",
+        "_trace",
+    )
 
-    def __init__(
+    def __init__(  # noqa: PLR0913 -- every collaborator is injectable for determinism
         self,
         *,
         trace: TraceContext,
@@ -68,6 +83,7 @@ class SessionStateMachine:
         clock: MonotonicClock = time.monotonic_ns,
         lamport: LamportClock | None = None,
         history_size: int = 64,
+        on_transition: TransitionListener | None = None,
     ) -> None:
         """Create a machine in ``IDLE``.
 
@@ -84,6 +100,7 @@ class SessionStateMachine:
         self._state = SessionState.IDLE
         self._drain_reason: DrainReason | None = None
         self._history: deque[Transition] = deque(maxlen=history_size)
+        self._listener = on_transition
 
     @property
     def state(self) -> SessionState:
@@ -181,6 +198,8 @@ class SessionStateMachine:
                 trigger=trigger,
             )
         )
+        if self._listener is not None:
+            self._listener(transition)
         return transition
 
     @override

@@ -15,7 +15,11 @@ from voice_ai_realtime_gateway.domain.errors import (
     SessionStateError,
     StaleSpanError,
 )
-from voice_ai_realtime_gateway.domain.machine import SessionStateMachine, Transition
+from voice_ai_realtime_gateway.domain.machine import (
+    SessionStateMachine,
+    Transition,
+    TransitionListener,
+)
 from voice_ai_realtime_gateway.domain.states import (
     ACTIVE_OUTPUT_STATES,
     TERMINAL_STATES,
@@ -47,6 +51,7 @@ __all__ = [
     "SessionTrigger",
     "StaleSpanError",
     "Transition",
+    "TransitionListener",
     "drain_reason_for",
     "resolve_transition",
     "transition_table",

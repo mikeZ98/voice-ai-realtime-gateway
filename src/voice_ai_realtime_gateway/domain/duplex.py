@@ -17,6 +17,7 @@ cancellation are reported as stragglers and fault the session (fail closed).
 
 from __future__ import annotations
 
+import asyncio
 import time
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any, Final, Protocol, final, override
@@ -41,7 +42,6 @@ from voice_ai_realtime_gateway.telemetry.ids import TraceContext
 from voice_ai_realtime_gateway.telemetry.latency import FirstTokenTracker, GlassToGlassTracker
 
 if TYPE_CHECKING:
-    import asyncio
     from collections.abc import Coroutine
 
     from voice_ai_realtime_gateway.core.frames import AudioFrame
@@ -98,6 +98,7 @@ class DuplexSession:
         "_clock",
         "_drain_timeout_s",
         "_egress",
+        "_faulted",
         "_first_token",
         "_g2g",
         "_machine",
@@ -106,6 +107,7 @@ class DuplexSession:
         "_sink",
         "_speech_started_at",
         "_tasks",
+        "_terminated",
     )
 
     def __init__(  # noqa: PLR0913 -- every collaborator is injectable for determinism
@@ -135,8 +137,13 @@ class DuplexSession:
         self._clock = clock
         self._drain_timeout_s = drain_timeout_s
         self._barge_in_budget_ns = barge_in_budget_ns
+        self._terminated = asyncio.Event()
+        self._faulted = False
         self._machine = SessionStateMachine(
-            trace=TraceContext.new() if trace is None else trace, sink=sink, clock=clock
+            trace=TraceContext.new() if trace is None else trace,
+            sink=sink,
+            clock=clock,
+            on_transition=self._observe,
         )
         self._ring = (
             AudioRingBuffer(
@@ -187,6 +194,20 @@ class DuplexSession:
         return self._first_token
 
     @property
+    def terminated(self) -> bool:
+        """Whether the session reached ``TERMINATED``."""
+        return self._terminated.is_set()
+
+    @property
+    def faulted(self) -> bool:
+        """Whether the session terminated through ``FAULT`` rather than ``CLOSE``."""
+        return self._faulted
+
+    async def wait_terminated(self) -> None:
+        """Suspend until the session reaches ``TERMINATED`` (by any path)."""
+        await self._terminated.wait()
+
+    @property
     def active_tasks(self) -> int:
         """Supervised tasks that have not finished."""
         return len(self._tasks)
@@ -226,6 +247,19 @@ class DuplexSession:
         self._sink.emit(VadSpeechStarted(trace=self._machine.trace, at_ns=now))
         if self._machine.state in ACTIVE_OUTPUT_STATES:
             return await self._barge_in(now)
+        return None
+
+    async def interrupt(self, *, at_ns: int | None = None) -> BargeInReport | None:
+        """Cancel agent output on an explicit request (e.g. a client cancel signal).
+
+        Takes exactly the barge-in path, without touching VAD turn bookkeeping.
+
+        Returns:
+            The barge-in report, or ``None`` if the agent was neither thinking nor
+            speaking.
+        """
+        if self._machine.state in ACTIVE_OUTPUT_STATES:
+            return await self._barge_in(self._clock() if at_ns is None else at_ns)
         return None
 
     def on_user_speech_stopped(self, *, at_ns: int | None = None) -> Transition | None:
@@ -344,7 +378,23 @@ class DuplexSession:
             machine.fire(SessionTrigger.DRAIN_COMPLETE)
         return report
 
+    async def abort(self) -> JoinReport:
+        """Fail the session immediately (``FAULT -> TERMINATED``). Idempotent.
+
+        Used by supervisors when something outside the session failed. Turn tasks are
+        cancelled, queued audio is dropped and tasks are reaped within
+        ``drain_timeout_s``.
+        """
+        self._tasks.close()
+        self._fault()
+        return await self._tasks.join(self._drain_timeout_s)
+
     # ------------------------------------------------------------------ internals
+
+    def _observe(self, transition: Transition) -> None:
+        if transition.target is SessionState.TERMINATED:
+            self._faulted = transition.trigger is SessionTrigger.FAULT
+            self._terminated.set()
 
     def _end_user_turn(self, now: int) -> Transition:
         self._machine.open_span()
