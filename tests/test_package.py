@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import importlib
 import socket
 from importlib.metadata import version
 
@@ -8,9 +9,20 @@ from pytest_socket import SocketBlockedError
 
 import voice_ai_realtime_gateway
 
+PUBLIC_PACKAGES = ("voice_ai_realtime_gateway.telemetry",)
+
 
 def test_version_matches_distribution_metadata() -> None:
     assert voice_ai_realtime_gateway.__version__ == version("voice-ai-realtime-gateway")
+
+
+@pytest.mark.parametrize("module_name", PUBLIC_PACKAGES)
+def test_public_api_is_exact_and_resolvable(module_name: str) -> None:
+    module = importlib.import_module(module_name)
+    exported = module.__all__
+    assert len(set(exported)) == len(exported), "__all__ must be duplicate-free"
+    for name in exported:
+        assert getattr(module, name) is not None
 
 
 @pytest.mark.parametrize("family", [socket.AF_INET, socket.AF_INET6])
