@@ -15,6 +15,7 @@ PUBLIC_PACKAGES = (
     "voice_ai_realtime_gateway.domain",
     "voice_ai_realtime_gateway.inference",
     "voice_ai_realtime_gateway.pipeline",
+    "voice_ai_realtime_gateway.production",
     "voice_ai_realtime_gateway.telemetry",
     "voice_ai_realtime_gateway.transport",
     "voice_ai_realtime_gateway.vad",

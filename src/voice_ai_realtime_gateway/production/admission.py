@@ -69,11 +69,16 @@ _BEARER: Final = re.compile(r"Bearer ([A-Za-z0-9_.-]+)", re.IGNORECASE)
 
 
 class AdmissionError(Exception):
-    """A connection was refused; ``reason`` is safe to send to the client."""
+    """A connection was refused; ``reason`` is safe to send to the client.
 
-    def __init__(self, reason: str) -> None:
-        """Refuse with a short public ``reason``."""
+    ``code`` is the WebSocket close code: 1008 (policy violation) for credential and
+    policy failures, 1013 (try again later) for capacity and draining.
+    """
+
+    def __init__(self, reason: str, *, code: int = 1008) -> None:
+        """Refuse with a short public ``reason`` and close ``code``."""
         self.reason = reason
+        self.code = code
         super().__init__(reason)
 
 
