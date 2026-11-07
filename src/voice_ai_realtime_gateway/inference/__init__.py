@@ -1,5 +1,7 @@
 """Real-time AI inference pipeline: ASR -> LLM -> sentence chunker -> TTS."""
 
+from voice_ai_realtime_gateway.inference.agent import AgentConfig, VoiceAgentPipeline
+from voice_ai_realtime_gateway.inference.capture import DEFAULT_PREROLL_MS, SpeechCapture, Utterance
 from voice_ai_realtime_gateway.inference.chunker import (
     ABBREVIATIONS,
     ChunkerConfig,
@@ -37,7 +39,9 @@ __all__ = [
     "ABBREVIATIONS",
     "DEFAULT_MAX_CHARS",
     "DEFAULT_MAX_TURNS",
+    "DEFAULT_PREROLL_MS",
     "UNKNOWN_WORD",
+    "AgentConfig",
     "AgentTurn",
     "ChunkerConfig",
     "ConversationState",
@@ -45,6 +49,7 @@ __all__ = [
     "PlaybackLedger",
     "ScriptedLLM",
     "SentenceChunker",
+    "SpeechCapture",
     "SpeechMap",
     "StreamingASR",
     "StreamingLLM",
@@ -57,6 +62,8 @@ __all__ = [
     "TranscriptChunk",
     "Turn",
     "UserTurn",
+    "Utterance",
+    "VoiceAgentPipeline",
     "WordTiming",
     "pcm16_peak",
     "word_prefix",
