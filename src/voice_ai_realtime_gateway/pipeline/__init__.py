@@ -2,8 +2,10 @@
 
 from voice_ai_realtime_gateway.pipeline.runner import (
     GatewaySessionRunner,
+    IngressTap,
     RunOutcome,
+    Service,
     TurnHandler,
 )
 
-__all__ = ["GatewaySessionRunner", "RunOutcome", "TurnHandler"]
+__all__ = ["GatewaySessionRunner", "IngressTap", "RunOutcome", "Service", "TurnHandler"]

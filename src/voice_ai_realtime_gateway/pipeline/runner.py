@@ -24,15 +24,25 @@ Lifecycle guarantees:
   closes, and the cancellation propagates.
 * After every barge-in (VAD onset or ``response.cancel``) the client receives
   ``playback.flush`` so it drops audio already in its jitter buffer.
+
+Extension points for higher layers (the inference pipeline uses all three):
+
+* ``egress`` replaces the transport as the session's audio egress (for example a
+  playback ledger that wraps the transport).
+* ``on_ingress`` is a synchronous tap receiving every ingress frame and its VAD
+  decision, after the session has applied the decision and before turn dispatch.
+* ``services`` are long-running coroutines supervised in the same task group: a failing
+  service faults the call exactly like a failing runner task, and services are
+  cancelled once the session has terminated and the socket is closed.
 """
 
 from __future__ import annotations
 
 import asyncio
 import time
-from collections.abc import Callable
+from collections.abc import Callable, Coroutine, Sequence
 from dataclasses import dataclass
-from typing import TYPE_CHECKING, final, override
+from typing import TYPE_CHECKING, Any, final, override
 
 from voice_ai_realtime_gateway.domain.duplex import DuplexSession
 from voice_ai_realtime_gateway.domain.states import SessionState
@@ -46,16 +56,24 @@ from voice_ai_realtime_gateway.transport.errors import CloseCode
 from voice_ai_realtime_gateway.vad.bridge import VadBridge
 
 if TYPE_CHECKING:
+    from voice_ai_realtime_gateway.core.frames import AudioFrame
     from voice_ai_realtime_gateway.domain.clock import MonotonicClock
+    from voice_ai_realtime_gateway.domain.duplex import AudioEgress
     from voice_ai_realtime_gateway.telemetry.ids import AudioSpanId
     from voice_ai_realtime_gateway.telemetry.sink import TelemetrySink
     from voice_ai_realtime_gateway.transport.base import CloseInitiator, VoiceTransport
-    from voice_ai_realtime_gateway.vad.base import StreamingVAD
+    from voice_ai_realtime_gateway.vad.base import StreamingVAD, VadDecision
 
-__all__ = ["GatewaySessionRunner", "RunOutcome", "TurnHandler"]
+__all__ = ["GatewaySessionRunner", "IngressTap", "RunOutcome", "Service", "TurnHandler"]
 
 type TurnHandler = Callable[[DuplexSession], None]
 """Called once per user turn, in ``PROCESSING_THOUGHT``; typically spawns generation."""
+
+type IngressTap = Callable[[AudioFrame, VadDecision], None]
+"""Synchronous observer of every ingress frame and its VAD decision. Must not block."""
+
+type Service = Callable[[], Coroutine[Any, Any, None]]
+"""Factory of a long-running coroutine supervised alongside the call."""
 
 
 @dataclass(frozen=True, slots=True, kw_only=True)
@@ -80,7 +98,10 @@ class GatewaySessionRunner:
         "_bridge",
         "_clock",
         "_dispatched_span",
+        "_on_ingress",
         "_on_user_turn",
+        "_service_tasks",
+        "_services",
         "_session",
         "_sink",
         "_started",
@@ -97,14 +118,20 @@ class GatewaySessionRunner:
         clock: MonotonicClock = time.monotonic_ns,
         on_user_turn: TurnHandler | None = None,
         drain_timeout_s: float = 0.1,
+        egress: AudioEgress | None = None,
+        on_ingress: IngressTap | None = None,
+        services: Sequence[Service] = (),
     ) -> None:
         """Create the session for ``transport``'s correlation context."""
         self._transport = transport
         self._sink = sink
         self._clock = clock
         self._on_user_turn = on_user_turn
+        self._on_ingress = on_ingress
+        self._services = tuple(services)
+        self._service_tasks: list[asyncio.Task[None]] = []
         self._session = DuplexSession(
-            egress=transport,
+            egress=transport if egress is None else egress,
             sink=sink,
             trace=transport.trace,
             clock=clock,
@@ -160,6 +187,10 @@ class GatewaySessionRunner:
                     group.create_task(self._ingress_loop(), name="ingress")
                     group.create_task(self._control_loop(), name="control")
                     group.create_task(self._watch_session(), name="session-watch")
+                    self._service_tasks = [
+                        group.create_task(service(), name=f"service-{index}")
+                        for index, service in enumerate(self._services)
+                    ]
             except* Exception as failures:
                 now = self._clock()
                 for error in failures.exceptions:
@@ -191,6 +222,8 @@ class GatewaySessionRunner:
     async def _ingress_loop(self) -> None:
         async for frame in self._transport.ingress:
             outcome = await self._bridge.feed(frame)
+            if self._on_ingress is not None:
+                self._on_ingress(frame, outcome.decision)
             if outcome.barge_in is not None:
                 await self._flush_client()
             self._dispatch_turn()
@@ -213,6 +246,8 @@ class GatewaySessionRunner:
             await self._transport.close(CloseCode.INTERNAL_ERROR, "session fault")
         else:
             await self._transport.close(CloseCode.NORMAL, "session ended")
+        for task in self._service_tasks:
+            task.cancel()
 
     async def _flush_client(self) -> None:
         self._barge_ins += 1
