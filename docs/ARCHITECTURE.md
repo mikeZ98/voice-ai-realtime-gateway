@@ -1,7 +1,8 @@
 # Architecture — Phase 1 core engine
 
 > Phase 2 (WebSocket transport, framing, control protocol, streaming VAD and the session
-> runner) is documented in [`TRANSPORT.md`](TRANSPORT.md).
+> runner) is documented in [`TRANSPORT.md`](TRANSPORT.md). Phase 3 (the ASR → LLM → TTS
+> inference pipeline) is documented in [`INFERENCE.md`](INFERENCE.md).
 
 Phase 1 delivers the transport-agnostic heart of the gateway: the session lifecycle, the
 egress playback path with low-latency barge-in, the bounded audio data plane, and the

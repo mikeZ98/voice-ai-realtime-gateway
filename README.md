@@ -29,9 +29,24 @@ Phase 2 adds:
   disconnects end calls gracefully, faults close with `1011`, and every barge-in tells
   the client to flush its buffered audio.
 
+Phase 3 adds the AI pipeline (`VoiceAgentPipeline`):
+
+- **Streaming ASR → LLM → TTS** behind async-generator ports, with deterministic
+  in-memory doubles. Each utterance gets a pre-roll buffer and its own bounded ring;
+  LLM and TTS stream in parallel through a bounded queue.
+- **Sentence boundary chunking** that releases TTS units as soon as a boundary is
+  certain, independent of how the token stream is split.
+- **Truthful history under barge-in.** TTS halts within a fraction of a millisecond
+  (requirement: 5 ms), and the agent turn keeps only the whole words the user can have
+  heard.
+- **End-to-end tracing** from the user's audio span to the response's first egress
+  packet (`ResponseTimeline`).
+
 Design, the full transition matrix and the memory budget model are in
 [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md). The transport, data flow, wire protocol
-and overhead model are in [`docs/TRANSPORT.md`](docs/TRANSPORT.md).
+and overhead model are in [`docs/TRANSPORT.md`](docs/TRANSPORT.md). The inference
+pipeline, truncation mechanics and chunking model are in
+[`docs/INFERENCE.md`](docs/INFERENCE.md).
 
 ## Usage sketch
 
@@ -79,6 +94,23 @@ async def handle(connection, headers):  # connection: any WebSocketConnection
         on_user_turn=lambda session: session.spawn(reply(session), name="llm"),
     )
     outcome = await runner.run()  # returns when the socket closes
+```
+
+## Serving a voice agent
+
+```python
+from voice_ai_realtime_gateway.inference import VoiceAgentPipeline
+
+agent = VoiceAgentPipeline(
+    transport=transport,  # WebSocketVoiceTransport
+    vad=EnergyVAD(),
+    asr=my_asr,  # StreamingASR
+    llm=my_llm,  # StreamingLLM
+    tts=my_tts,  # StreamingTTS
+    sink=sink,
+)
+outcome = await agent.run()
+print(agent.conversation.turns)  # what was actually said, by both sides
 ```
 
 ## Development
