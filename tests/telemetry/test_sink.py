@@ -10,8 +10,10 @@ from voice_ai_realtime_gateway.telemetry.events import (
     FirstTokenLatency,
     IngressGap,
     PacketLatency,
+    ResponseTimeline,
     StateTransitioned,
     TaskFailed,
+    TranscriptReceived,
     TransitionRejected,
     TransportClosed,
     VadSpeechStarted,
@@ -26,8 +28,10 @@ EVENT_TYPES = (
     FirstTokenLatency,
     IngressGap,
     PacketLatency,
+    ResponseTimeline,
     StateTransitioned,
     TaskFailed,
+    TranscriptReceived,
     TransitionRejected,
     TransportClosed,
     VadSpeechStarted,
@@ -77,3 +81,25 @@ def test_flight_recorder_rejects_non_positive_capacity() -> None:
 def test_ingress_gap_reports_lost_packet_count() -> None:
     gap = IngressGap(trace=TraceContext.new(), at_ns=1, expected_sequence=7, received_sequence=10)
     assert gap.lost == 3
+
+
+def test_response_timeline_derives_glass_to_glass_latency() -> None:
+    trace = TraceContext.new()
+
+    def timeline(first_egress_ns: int | None) -> ResponseTimeline:
+        return ResponseTimeline(
+            trace=trace,
+            at_ns=9,
+            user_span_id="00000000000000aa",
+            speech_end_ns=1_000,
+            transcript_ns=1_200,
+            first_token_ns=1_500,
+            first_audio_ns=1_700,
+            first_egress_ns=first_egress_ns,
+            completed=True,
+            generated_chars=10,
+            spoken_chars=10,
+        )
+
+    assert timeline(1_800).glass_to_glass_ns == 800
+    assert timeline(None).glass_to_glass_ns is None

@@ -20,9 +20,11 @@ __all__ = [
     "FirstTokenLatency",
     "IngressGap",
     "PacketLatency",
+    "ResponseTimeline",
     "StateTransitioned",
     "TaskFailed",
     "TelemetryEvent",
+    "TranscriptReceived",
     "TransitionRejected",
     "TransportClosed",
     "VadSpeechStarted",
@@ -149,6 +151,46 @@ class TransportClosed:
     initiator: str
 
 
+@dataclass(frozen=True, slots=True, kw_only=True)
+class TranscriptReceived:
+    """The ASR produced an interim or final transcript for a user utterance span."""
+
+    trace: TraceContext
+    at_ns: int
+    is_final: bool
+    text_chars: int
+    confidence: float
+
+
+@dataclass(frozen=True, slots=True, kw_only=True)
+class ResponseTimeline:
+    """End-to-end timeline of one agent response, from user speech end to egress.
+
+    ``trace`` is the response span; ``user_span_id`` links the user utterance whose
+    packets triggered it. Stage timestamps are ``None`` if the stage never happened
+    (for example, a barge-in before any audio was synthesised).
+    """
+
+    trace: TraceContext
+    at_ns: int
+    user_span_id: str
+    speech_end_ns: int
+    transcript_ns: int | None
+    first_token_ns: int | None
+    first_audio_ns: int | None
+    first_egress_ns: int | None
+    completed: bool
+    generated_chars: int
+    spoken_chars: int
+
+    @property
+    def glass_to_glass_ns(self) -> int | None:
+        """End of user speech to the first agent audio packet leaving the gateway."""
+        if self.first_egress_ns is None:
+            return None
+        return self.first_egress_ns - self.speech_end_ns
+
+
 type TelemetryEvent = (
     VadSpeechStarted
     | VadSpeechStopped
@@ -161,4 +203,6 @@ type TelemetryEvent = (
     | TaskFailed
     | IngressGap
     | TransportClosed
+    | TranscriptReceived
+    | ResponseTimeline
 )
