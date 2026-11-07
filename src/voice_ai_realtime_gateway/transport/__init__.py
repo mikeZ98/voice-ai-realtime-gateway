@@ -1,5 +1,12 @@
 """Real-time transport: binary audio framing, typed control protocol and adapters."""
 
+from voice_ai_realtime_gateway.transport.base import (
+    AudioIngress,
+    CloseInitiator,
+    ControlChannel,
+    VoiceTransport,
+    WebSocketConnection,
+)
 from voice_ai_realtime_gateway.transport.control import (
     MAX_NONCE,
     MAX_SAMPLE_RATE_HZ,
@@ -36,9 +43,24 @@ from voice_ai_realtime_gateway.transport.framing import (
     decode_packet,
     encode_packet,
 )
+from voice_ai_realtime_gateway.transport.memory import DEFAULT_MEMORY_CAPACITY, MemoryWebSocket
+from voice_ai_realtime_gateway.transport.websocket import (
+    DEFAULT_INGRESS_RING_BYTES,
+    DEFAULT_INGRESS_RING_FRAMES,
+    ControlStream,
+    HeartbeatConfig,
+    IngressStream,
+    Sleeper,
+    TransportLimits,
+    TransportStats,
+    WebSocketVoiceTransport,
+)
 
 __all__ = [
+    "DEFAULT_INGRESS_RING_BYTES",
+    "DEFAULT_INGRESS_RING_FRAMES",
     "DEFAULT_MAX_PAYLOAD_BYTES",
+    "DEFAULT_MEMORY_CAPACITY",
     "HEADER_SIZE",
     "MAX_CLOSE_REASON_BYTES",
     "MAX_NONCE",
@@ -47,11 +69,18 @@ __all__ = [
     "PACKET_VERSION",
     "ApplicationMessage",
     "AudioFormat",
+    "AudioIngress",
     "CancelResponse",
     "ClientMessage",
     "CloseCode",
+    "CloseInitiator",
+    "ControlChannel",
+    "ControlStream",
     "DecodedPacket",
     "Hangup",
+    "HeartbeatConfig",
+    "IngressStream",
+    "MemoryWebSocket",
     "PacketStreamDecoder",
     "Ping",
     "PlaybackFlush",
@@ -59,9 +88,15 @@ __all__ = [
     "ProtocolError",
     "ServerMessage",
     "SessionConfig",
+    "Sleeper",
     "TransportClosedError",
     "TransportError",
+    "TransportLimits",
+    "TransportStats",
     "VadConfigUpdate",
+    "VoiceTransport",
+    "WebSocketConnection",
+    "WebSocketVoiceTransport",
     "decode_client_message",
     "decode_packet",
     "decode_server_message",
