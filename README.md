@@ -17,8 +17,21 @@ Phase 1 provides:
 - **Typed telemetry.** VAD, first-token, glass-to-glass packet latency, transitions and
   barge-in events, all correlated by `X-Session-ID` / `X-Audio-Span-ID`.
 
+Phase 2 adds:
+
+- **WebSocket voice transport.** Binary audio packets (54-byte header carrying
+  `X-Session-ID` / `X-Audio-Span-ID`) and typed JSON control share one connection.
+  Ingress is bounded (`DROP_OLDEST` or real TCP backpressure), protocol violations close
+  with their RFC 6455 code, and a heartbeat detects dead peers.
+- **Streaming VAD.** A deterministic energy VAD with two-threshold hysteresis
+  (speech-start confidence, trailing-silence hangover) drives barge-in and turn-taking.
+- **`GatewaySessionRunner`.** Transport, VAD and session run under one supervisor:
+  disconnects end calls gracefully, faults close with `1011`, and every barge-in tells
+  the client to flush its buffered audio.
+
 Design, the full transition matrix and the memory budget model are in
-[`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md).
+[`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md). The transport, data flow, wire protocol
+and overhead model are in [`docs/TRANSPORT.md`](docs/TRANSPORT.md).
 
 ## Usage sketch
 
@@ -43,6 +56,29 @@ session.end_response()  # drains → LISTENING
 # user talks over the agent:
 report = await session.on_user_speech_started()  # BargeInReport, < 15 ms to DRAINING
 await session.aclose()  # DRAINING → TERMINATED
+```
+
+## Serving a call
+
+```python
+from voice_ai_realtime_gateway.pipeline import GatewaySessionRunner
+from voice_ai_realtime_gateway.telemetry import FlightRecorder, TraceContext
+from voice_ai_realtime_gateway.transport import WebSocketVoiceTransport
+from voice_ai_realtime_gateway.vad import EnergyVAD
+
+
+async def handle(connection, headers):  # connection: any WebSocketConnection
+    sink = FlightRecorder()
+    transport = WebSocketVoiceTransport(
+        connection, trace=TraceContext.from_headers(headers), sink=sink
+    )
+    runner = GatewaySessionRunner(
+        transport=transport,
+        vad=EnergyVAD(),
+        sink=sink,
+        on_user_turn=lambda session: session.spawn(reply(session), name="llm"),
+    )
+    outcome = await runner.run()  # returns when the socket closes
 ```
 
 ## Development
