@@ -1,17 +1,18 @@
-"""Shared fixtures: telemetry doubles and a strict event-loop guard."""
+"""Shared fixtures: frame factories, telemetry doubles and a strict event-loop guard."""
 
 from __future__ import annotations
 
 import asyncio
 import gc
 from pathlib import Path
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Protocol
 
 import pytest
 from hypothesis import HealthCheck, settings
 from hypothesis.configuration import set_hypothesis_home_dir
 from hypothesis.database import DirectoryBasedExampleDatabase
 
+from voice_ai_realtime_gateway.core.frames import AudioCodec, AudioFrame
 from voice_ai_realtime_gateway.telemetry.ids import TraceContext
 from voice_ai_realtime_gateway.telemetry.sink import FlightRecorder
 
@@ -30,6 +31,20 @@ settings.register_profile(
 )
 settings.load_profile("gateway")
 
+FRAME_NS = 20_000_000
+"""20 ms media frames."""
+
+
+class FrameFactory(Protocol):
+    def __call__(
+        self,
+        nbytes: int = ...,
+        *,
+        trace: TraceContext | None = ...,
+        sequence: int | None = ...,
+        origin_ns: int = ...,
+    ) -> AudioFrame: ...
+
 
 @pytest.fixture
 def recorder() -> FlightRecorder:
@@ -39,6 +54,31 @@ def recorder() -> FlightRecorder:
 @pytest.fixture
 def trace() -> TraceContext:
     return TraceContext.new()
+
+
+@pytest.fixture
+def make_frame(trace: TraceContext) -> FrameFactory:
+    counter = iter(range(1 << 62))
+
+    def factory(
+        nbytes: int = 640,
+        *,
+        trace: TraceContext | None = trace,
+        sequence: int | None = None,
+        origin_ns: int = 0,
+    ) -> AudioFrame:
+        return AudioFrame.wrap(
+            bytes(nbytes),
+            codec=AudioCodec.PCM16,
+            sample_rate_hz=16_000,
+            channels=1,
+            duration_ns=FRAME_NS,
+            sequence=next(counter) if sequence is None else sequence,
+            origin_ns=origin_ns,
+            trace=TraceContext.new() if trace is None else trace,
+        )
+
+    return factory
 
 
 @pytest.fixture

@@ -9,7 +9,10 @@ from pytest_socket import SocketBlockedError
 
 import voice_ai_realtime_gateway
 
-PUBLIC_PACKAGES = ("voice_ai_realtime_gateway.telemetry",)
+PUBLIC_PACKAGES = (
+    "voice_ai_realtime_gateway.core",
+    "voice_ai_realtime_gateway.telemetry",
+)
 
 
 def test_version_matches_distribution_metadata() -> None:
