@@ -31,6 +31,7 @@ class CloseCode(IntEnum):
     POLICY_VIOLATION = 1008
     MESSAGE_TOO_BIG = 1009
     INTERNAL_ERROR = 1011
+    TRY_AGAIN_LATER = 1013
 
 
 def truncate_reason(reason: str) -> str:

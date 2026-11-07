@@ -6,6 +6,7 @@ from voice_ai_realtime_gateway.core.frames import (
     AudioCodec,
     AudioFrame,
 )
+from voice_ai_realtime_gateway.core.ratelimit import TokenBucket
 from voice_ai_realtime_gateway.core.ring import (
     AudioRingBuffer,
     OverflowPolicy,
@@ -28,4 +29,5 @@ __all__ = [
     "RingError",
     "RingFullError",
     "RingStats",
+    "TokenBucket",
 ]

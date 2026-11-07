@@ -12,7 +12,12 @@ from duplex_support import until
 from transport_support import Client, ManualSleeper, ScriptedConnection
 from voice_ai_realtime_gateway.core.frames import AudioCodec
 from voice_ai_realtime_gateway.core.ring import AudioRingBuffer, OverflowPolicy
-from voice_ai_realtime_gateway.telemetry.events import BufferOverflow, IngressGap, TransportClosed
+from voice_ai_realtime_gateway.telemetry.events import (
+    BufferOverflow,
+    EgressDropped,
+    IngressGap,
+    TransportClosed,
+)
 from voice_ai_realtime_gateway.telemetry.ids import TraceContext
 from voice_ai_realtime_gateway.transport.base import CloseInitiator
 from voice_ai_realtime_gateway.transport.control import (
@@ -245,7 +250,7 @@ async def test_local_close_is_idempotent_and_truncates_the_reason(
 
 
 async def test_egress_after_disconnect_is_dropped_not_raised(
-    harness_factory: Factory, trace: TraceContext
+    harness_factory: Factory, trace: TraceContext, recorder: FlightRecorder
 ) -> None:
     harness = harness_factory.start()  # type: ignore[attr-defined]
     await harness.client.socket.close()
@@ -255,6 +260,7 @@ async def test_egress_after_disconnect_is_dropped_not_raised(
     await harness.transport.send(pcm_frame(trace))  # transport closed
     assert not await harness.transport.send_control(PlaybackFlush())
     assert harness.transport.stats().egress_dropped == 2
+    assert len(recorder.of_type(EgressDropped)) == 2
 
 
 # ------------------------------------------------------------------------ violations
@@ -264,10 +270,10 @@ async def test_egress_after_disconnect_is_dropped_not_raised(
     ("message", "code"),
     [
         (b"\x00" * 10, CloseCode.INVALID_PAYLOAD),
-        (b"\x00" * (HEADER_SIZE + 1025), CloseCode.MESSAGE_TOO_BIG),
+        (b"\x00" * (HEADER_SIZE + 1025), CloseCode.POLICY_VIOLATION),
         ("{", CloseCode.INVALID_PAYLOAD),
         ('{"type":"playback.flush"}', CloseCode.UNSUPPORTED_DATA),
-        ("x" * 4097, CloseCode.MESSAGE_TOO_BIG),
+        ("x" * 4097, CloseCode.POLICY_VIOLATION),
     ],
 )
 async def test_wire_violations_close_with_the_matching_code(
@@ -546,3 +552,31 @@ async def test_control_end_is_idempotent_and_trace_is_exposed(
     transport.control.end()
     assert len(transport.control) == 1, "exactly one end-of-stream marker"
     assert [m async for m in transport.control] == []
+
+
+async def test_control_flood_beyond_the_rate_limit_is_a_policy_violation(
+    harness_factory: Factory, clock: FakeClock
+) -> None:
+    harness = harness_factory.start(  # type: ignore[attr-defined]
+        limits=TransportLimits(control_rate_per_s=1.0, control_burst=3)
+    )
+    for nonce in range(3):
+        await harness.client.control(Ping(nonce))
+    for nonce in range(3):
+        assert await harness.client.receive() == Pong(nonce), "the burst is served"
+    await harness.client.control(Ping(99))  # 4th ping inside the same instant
+    await harness.runner
+    assert harness.transport.close_code == CloseCode.POLICY_VIOLATION
+    assert harness.transport.close_reason == "control message rate exceeded"
+    del clock
+
+
+async def test_control_rate_refills_over_time(harness_factory: Factory, clock: FakeClock) -> None:
+    harness = harness_factory.start(  # type: ignore[attr-defined]
+        limits=TransportLimits(control_rate_per_s=2.0, control_burst=1)
+    )
+    for nonce in range(4):
+        await harness.client.control(Ping(nonce))
+        assert await harness.client.receive() == Pong(nonce)
+        clock.now += 500_000_000  # one token every 0.5 s
+    assert not harness.transport.closed

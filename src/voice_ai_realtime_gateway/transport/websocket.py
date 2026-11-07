@@ -20,6 +20,9 @@ Ingress path (single reader task)::
   message counts as liveness. Silence longer than ``timeout_s`` closes with ``1001``.
   While the reader is deliberately stalled by backpressure, the stall is ours, not the
   peer's, so dead-peer detection is suspended.
+* **Abuse guards.** Text and binary messages above their size limits, and control
+  messages above the per-connection rate (token bucket: ping floods, slow-drip
+  control spam), close the connection immediately with ``1008`` (policy violation).
 * **Protocol violations** close the connection with the matching RFC 6455 code.
 
 Egress is best-effort once the peer is gone: frames sent after close are counted and
@@ -36,8 +39,9 @@ from dataclasses import dataclass
 from typing import TYPE_CHECKING, Final, Self, final, override
 
 from voice_ai_realtime_gateway.core.frames import AudioCodec
+from voice_ai_realtime_gateway.core.ratelimit import TokenBucket
 from voice_ai_realtime_gateway.core.ring import AudioRingBuffer, OverflowPolicy, RingClosedError
-from voice_ai_realtime_gateway.telemetry.events import IngressGap, TransportClosed
+from voice_ai_realtime_gateway.telemetry.events import EgressDropped, IngressGap, TransportClosed
 from voice_ai_realtime_gateway.transport.base import CloseInitiator
 from voice_ai_realtime_gateway.transport.control import (
     Ping,
@@ -126,11 +130,21 @@ class HeartbeatConfig:
 
 @dataclass(frozen=True, slots=True, kw_only=True)
 class TransportLimits:
-    """Per-connection resource bounds."""
+    """Per-connection resource bounds.
+
+    Attributes:
+        max_payload_bytes: largest audio payload; bigger binary messages close with 1008.
+        max_control_chars: largest control message; bigger text messages close with 1008.
+        max_pending_control: control messages the consumer may lag behind.
+        control_rate_per_s: sustained control messages per second (pings included).
+        control_burst: control messages allowed in a burst.
+    """
 
     max_payload_bytes: int = DEFAULT_MAX_PAYLOAD_BYTES
     max_control_chars: int = 4096
     max_pending_control: int = 32
+    control_rate_per_s: float = 20.0
+    control_burst: int = 40
 
     def __post_init__(self) -> None:
         """Validate.
@@ -138,7 +152,13 @@ class TransportLimits:
         Raises:
             ValueError: if any limit is not positive.
         """
-        for name in ("max_payload_bytes", "max_control_chars", "max_pending_control"):
+        for name in (
+            "max_payload_bytes",
+            "max_control_chars",
+            "max_pending_control",
+            "control_rate_per_s",
+            "control_burst",
+        ):
             if getattr(self, name) < 1:
                 msg = f"{name} must be positive"
                 raise ValueError(msg)
@@ -246,6 +266,7 @@ class WebSocketVoiceTransport:
         "_closed_by",
         "_connection",
         "_control",
+        "_control_bucket",
         "_counters",
         "_format",
         "_heartbeat",
@@ -306,6 +327,11 @@ class WebSocketVoiceTransport:
         )
         self._ingress = IngressStream(self._ring)
         self._control = ControlStream(self.send_control, self._limits.max_pending_control)
+        self._control_bucket = TokenBucket(
+            rate_per_s=self._limits.control_rate_per_s,
+            burst=self._limits.control_burst,
+            clock=clock,
+        )
         self._format: AudioFormat | None = None
         self._ingress_span: AudioSpanId | None = None
         self._next_sequence = 0
@@ -393,14 +419,20 @@ class WebSocketVoiceTransport:
     async def send(self, frame: AudioFrame, /) -> None:
         """Deliver one agent frame; silently counted as dropped once closed."""
         if self.closed:
-            self._counters["egress_dropped"] += 1
+            self._drop(frame)
             return
         packet = encode_packet(frame)
         if await self._deliver(packet):
             self._counters["frames_out"] += 1
             self._counters["bytes_out"] += len(packet)
         else:
-            self._counters["egress_dropped"] += 1
+            self._drop(frame)
+
+    def _drop(self, frame: AudioFrame) -> None:
+        self._counters["egress_dropped"] += 1
+        self._sink.emit(
+            EgressDropped(trace=frame.trace, at_ns=self._clock(), sequence=frame.sequence)
+        )
 
     async def send_control(self, message: ServerMessage, /) -> bool:
         """Send a server control message; ``False`` if the connection is gone."""
@@ -482,7 +514,9 @@ class WebSocketVoiceTransport:
 
     async def _on_control(self, text: str) -> None:
         if len(text) > self._limits.max_control_chars:
-            raise ProtocolError(CloseCode.MESSAGE_TOO_BIG, "control message too large")
+            raise ProtocolError(CloseCode.POLICY_VIOLATION, "control message too large")
+        if not self._control_bucket.try_acquire():
+            raise ProtocolError(CloseCode.POLICY_VIOLATION, "control message rate exceeded")
         message = decode_client_message(text)
         self._counters["control_in"] += 1
         if isinstance(message, Ping):
@@ -499,7 +533,7 @@ class WebSocketVoiceTransport:
 
     async def _on_audio(self, data: bytes) -> None:
         if len(data) > HEADER_SIZE + self._limits.max_payload_bytes:
-            raise ProtocolError(CloseCode.MESSAGE_TOO_BIG, "audio message too large")
+            raise ProtocolError(CloseCode.POLICY_VIOLATION, "audio message too large")
         frame = decode_packet(
             data, received_at_ns=self._last_seen, max_payload=self._limits.max_payload_bytes
         ).frame
