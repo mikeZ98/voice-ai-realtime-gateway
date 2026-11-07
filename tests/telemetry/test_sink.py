@@ -7,33 +7,44 @@ import pytest
 from voice_ai_realtime_gateway.telemetry.events import (
     BargeInHandled,
     BufferOverflow,
+    EgressDropped,
     FirstTokenLatency,
     IngressGap,
     PacketLatency,
+    ProviderError,
     ResponseTimeline,
     StateTransitioned,
     TaskFailed,
     TranscriptReceived,
     TransitionRejected,
     TransportClosed,
+    TtsHalted,
     VadSpeechStarted,
     VadSpeechStopped,
 )
 from voice_ai_realtime_gateway.telemetry.ids import TraceContext
-from voice_ai_realtime_gateway.telemetry.sink import FlightRecorder, NullSink, TelemetrySink
+from voice_ai_realtime_gateway.telemetry.sink import (
+    FanoutSink,
+    FlightRecorder,
+    NullSink,
+    TelemetrySink,
+)
 
 EVENT_TYPES = (
     BargeInHandled,
     BufferOverflow,
+    EgressDropped,
     FirstTokenLatency,
     IngressGap,
     PacketLatency,
+    ProviderError,
     ResponseTimeline,
     StateTransitioned,
     TaskFailed,
     TranscriptReceived,
     TransitionRejected,
     TransportClosed,
+    TtsHalted,
     VadSpeechStarted,
     VadSpeechStopped,
 )
@@ -103,3 +114,10 @@ def test_response_timeline_derives_glass_to_glass_latency() -> None:
 
     assert timeline(1_800).glass_to_glass_ns == 800
     assert timeline(None).glass_to_glass_ns is None
+
+
+def test_fanout_delivers_to_every_sink_in_order() -> None:
+    first, second = FlightRecorder(), FlightRecorder()
+    event = VadSpeechStarted(trace=TraceContext.new(), at_ns=1)
+    FanoutSink(first, NullSink(), second).emit(event)
+    assert first.events == second.events == (event,)

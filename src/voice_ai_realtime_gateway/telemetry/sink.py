@@ -13,7 +13,7 @@ from typing import TYPE_CHECKING, Protocol, final, override
 if TYPE_CHECKING:
     from voice_ai_realtime_gateway.telemetry.events import TelemetryEvent
 
-__all__ = ["FlightRecorder", "NullSink", "TelemetrySink"]
+__all__ = ["FanoutSink", "FlightRecorder", "NullSink", "TelemetrySink"]
 
 
 class TelemetrySink(Protocol):
@@ -31,6 +31,22 @@ class NullSink:
 
     def emit(self, event: TelemetryEvent, /) -> None:
         """Drop ``event``."""
+
+
+@final
+class FanoutSink:
+    """Delivers every event to each of several sinks, in order."""
+
+    __slots__ = ("_sinks",)
+
+    def __init__(self, *sinks: TelemetrySink) -> None:
+        """Fan out to ``sinks``."""
+        self._sinks = sinks
+
+    def emit(self, event: TelemetryEvent, /) -> None:
+        """Forward ``event`` to every sink."""
+        for sink in self._sinks:
+            sink.emit(event)
 
 
 @final

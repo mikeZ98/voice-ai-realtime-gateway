@@ -17,9 +17,11 @@ if TYPE_CHECKING:
 __all__ = [
     "BargeInHandled",
     "BufferOverflow",
+    "EgressDropped",
     "FirstTokenLatency",
     "IngressGap",
     "PacketLatency",
+    "ProviderError",
     "ResponseTimeline",
     "StateTransitioned",
     "TaskFailed",
@@ -27,6 +29,7 @@ __all__ = [
     "TranscriptReceived",
     "TransitionRejected",
     "TransportClosed",
+    "TtsHalted",
     "VadSpeechStarted",
     "VadSpeechStopped",
 ]
@@ -191,6 +194,41 @@ class ResponseTimeline:
         return self.first_egress_ns - self.speech_end_ns
 
 
+@dataclass(frozen=True, slots=True, kw_only=True)
+class EgressDropped:
+    """An agent audio frame was discarded because the client connection is gone."""
+
+    trace: TraceContext
+    at_ns: int
+    sequence: int
+
+
+@dataclass(frozen=True, slots=True, kw_only=True)
+class TtsHalted:
+    """Speech synthesis stopped after a barge-in; ``halt_ns`` is measured from VAD onset."""
+
+    trace: TraceContext
+    at_ns: int
+    halt_ns: int
+
+
+@dataclass(frozen=True, slots=True, kw_only=True)
+class ProviderError:
+    """An upstream model provider failed (connect, stream or protocol).
+
+    ``fatal`` errors (authentication, quota, exhausted retries) end the stream; the
+    others are retried with backoff.
+    """
+
+    trace: TraceContext
+    at_ns: int
+    provider: str
+    kind: str
+    fatal: bool
+    attempt: int
+    detail: str
+
+
 type TelemetryEvent = (
     VadSpeechStarted
     | VadSpeechStopped
@@ -205,4 +243,7 @@ type TelemetryEvent = (
     | TransportClosed
     | TranscriptReceived
     | ResponseTimeline
+    | EgressDropped
+    | TtsHalted
+    | ProviderError
 )

@@ -3,9 +3,11 @@
 from voice_ai_realtime_gateway.telemetry.events import (
     BargeInHandled,
     BufferOverflow,
+    EgressDropped,
     FirstTokenLatency,
     IngressGap,
     PacketLatency,
+    ProviderError,
     ResponseTimeline,
     StateTransitioned,
     TaskFailed,
@@ -13,6 +15,7 @@ from voice_ai_realtime_gateway.telemetry.events import (
     TranscriptReceived,
     TransitionRejected,
     TransportClosed,
+    TtsHalted,
     VadSpeechStarted,
     VadSpeechStopped,
 )
@@ -34,7 +37,12 @@ from voice_ai_realtime_gateway.telemetry.latency import (
     LatencySummary,
     LatencyWindow,
 )
-from voice_ai_realtime_gateway.telemetry.sink import FlightRecorder, NullSink, TelemetrySink
+from voice_ai_realtime_gateway.telemetry.sink import (
+    FanoutSink,
+    FlightRecorder,
+    NullSink,
+    TelemetrySink,
+)
 
 __all__ = [
     "AUDIO_SPAN_ID_HEADER",
@@ -42,6 +50,8 @@ __all__ = [
     "AudioSpanId",
     "BargeInHandled",
     "BufferOverflow",
+    "EgressDropped",
+    "FanoutSink",
     "FirstTokenLatency",
     "FirstTokenTracker",
     "FlightRecorder",
@@ -52,6 +62,7 @@ __all__ = [
     "LatencyWindow",
     "NullSink",
     "PacketLatency",
+    "ProviderError",
     "ResponseTimeline",
     "SessionId",
     "StateTransitioned",
@@ -62,6 +73,7 @@ __all__ = [
     "TranscriptReceived",
     "TransitionRejected",
     "TransportClosed",
+    "TtsHalted",
     "VadSpeechStarted",
     "VadSpeechStopped",
     "new_session_id",
