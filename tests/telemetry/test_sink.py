@@ -8,10 +8,12 @@ from voice_ai_realtime_gateway.telemetry.events import (
     BargeInHandled,
     BufferOverflow,
     FirstTokenLatency,
+    IngressGap,
     PacketLatency,
     StateTransitioned,
     TaskFailed,
     TransitionRejected,
+    TransportClosed,
     VadSpeechStarted,
     VadSpeechStopped,
 )
@@ -22,10 +24,12 @@ EVENT_TYPES = (
     BargeInHandled,
     BufferOverflow,
     FirstTokenLatency,
+    IngressGap,
     PacketLatency,
     StateTransitioned,
     TaskFailed,
     TransitionRejected,
+    TransportClosed,
     VadSpeechStarted,
     VadSpeechStopped,
 )
@@ -68,3 +72,8 @@ def test_flight_recorder_filters_by_type_and_clears() -> None:
 def test_flight_recorder_rejects_non_positive_capacity() -> None:
     with pytest.raises(ValueError, match="capacity"):
         FlightRecorder(capacity=0)
+
+
+def test_ingress_gap_reports_lost_packet_count() -> None:
+    gap = IngressGap(trace=TraceContext.new(), at_ns=1, expected_sequence=7, received_sequence=10)
+    assert gap.lost == 3

@@ -18,11 +18,13 @@ __all__ = [
     "BargeInHandled",
     "BufferOverflow",
     "FirstTokenLatency",
+    "IngressGap",
     "PacketLatency",
     "StateTransitioned",
     "TaskFailed",
     "TelemetryEvent",
     "TransitionRejected",
+    "TransportClosed",
     "VadSpeechStarted",
     "VadSpeechStopped",
 ]
@@ -121,6 +123,32 @@ class TaskFailed:
     error_type: str
 
 
+@dataclass(frozen=True, slots=True, kw_only=True)
+class IngressGap:
+    """Ingress sequence numbers jumped within a span: packets were lost in the network."""
+
+    trace: TraceContext
+    at_ns: int
+    expected_sequence: int
+    received_sequence: int
+
+    @property
+    def lost(self) -> int:
+        """Number of packets missing between the expected and the received sequence."""
+        return self.received_sequence - self.expected_sequence
+
+
+@dataclass(frozen=True, slots=True, kw_only=True)
+class TransportClosed:
+    """The client transport closed (``initiator`` is ``"local"`` or ``"remote"``)."""
+
+    trace: TraceContext
+    at_ns: int
+    code: int
+    reason: str
+    initiator: str
+
+
 type TelemetryEvent = (
     VadSpeechStarted
     | VadSpeechStopped
@@ -131,4 +159,6 @@ type TelemetryEvent = (
     | BargeInHandled
     | BufferOverflow
     | TaskFailed
+    | IngressGap
+    | TransportClosed
 )
