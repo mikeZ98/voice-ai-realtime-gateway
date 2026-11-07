@@ -10,6 +10,7 @@ from pytest_socket import SocketBlockedError
 import voice_ai_realtime_gateway
 
 PUBLIC_PACKAGES = (
+    "voice_ai_realtime_gateway.adapters",
     "voice_ai_realtime_gateway.core",
     "voice_ai_realtime_gateway.domain",
     "voice_ai_realtime_gateway.inference",
