@@ -128,3 +128,31 @@ async def test_session_fault_from_a_task_sets_the_termination_signal(
     await asyncio.wait_for(session.wait_terminated(), timeout=1)
     await until(lambda: session.active_tasks == 0)
     assert session.faulted
+
+
+@pytest.mark.parametrize("ending", ["finish", "barge_in", "close"])
+async def test_playback_completion_signal_covers_every_way_out_of_speaking(
+    recorder: FlightRecorder,
+    clock: FakeClock,
+    trace: TraceContext,
+    make_frame: FrameFactory,
+    ending: str,
+) -> None:
+    session = DuplexSession(egress=RecordingEgress(), sink=recorder, clock=clock, trace=trace)
+    await asyncio.wait_for(session.wait_playback_complete(), timeout=1)  # idle: immediate
+    session.connect()
+    session.connected()
+    session.on_user_speech_stopped()
+    span = session.begin_response()
+    await session.push_audio(make_frame(trace=span))
+    waiter = asyncio.create_task(session.wait_playback_complete())
+    await asyncio.sleep(0)
+    assert not waiter.done(), "still speaking"
+    if ending == "finish":
+        session.end_response()
+    elif ending == "barge_in":
+        await session.on_user_speech_started()
+    else:
+        await session.aclose()
+    await asyncio.wait_for(waiter, timeout=1)
+    await session.aclose()

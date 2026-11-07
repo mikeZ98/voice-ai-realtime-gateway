@@ -103,6 +103,7 @@ class DuplexSession:
         "_g2g",
         "_machine",
         "_pending_turn_end",
+        "_playback_done",
         "_ring",
         "_sink",
         "_speech_started_at",
@@ -138,6 +139,8 @@ class DuplexSession:
         self._drain_timeout_s = drain_timeout_s
         self._barge_in_budget_ns = barge_in_budget_ns
         self._terminated = asyncio.Event()
+        self._playback_done = asyncio.Event()
+        self._playback_done.set()
         self._faulted = False
         self._machine = SessionStateMachine(
             trace=TraceContext.new() if trace is None else trace,
@@ -206,6 +209,16 @@ class DuplexSession:
     async def wait_terminated(self) -> None:
         """Suspend until the session reaches ``TERMINATED`` (by any path)."""
         await self._terminated.wait()
+
+    async def wait_playback_complete(self) -> None:
+        """Suspend until the current response has left ``SPEAKING``.
+
+        Resolves on natural completion (every queued frame was sent), barge-in, close
+        or fault. Returns immediately when no response is playing. Callers that must
+        know what the user actually heard wait here rather than trusting that TTS
+        finished *generating*.
+        """
+        await self._playback_done.wait()
 
     @property
     def active_tasks(self) -> int:
@@ -316,6 +329,7 @@ class DuplexSession:
             The trace context every frame of this response must carry.
         """
         transition = self._machine.fire(SessionTrigger.RESPONSE_AUDIO_STARTED, observed=observed)
+        self._playback_done.clear()
         self._ring.reset()
         _ = self._tasks.spawn(self._pump(), name=f"{_PUMP_TASK_PREFIX}:{transition.trace.span_id}")
         return transition.trace
@@ -392,6 +406,8 @@ class DuplexSession:
     # ------------------------------------------------------------------ internals
 
     def _observe(self, transition: Transition) -> None:
+        if transition.source is SessionState.SPEAKING:
+            self._playback_done.set()
         if transition.target is SessionState.TERMINATED:
             self._faulted = transition.trigger is SessionTrigger.FAULT
             self._terminated.set()
