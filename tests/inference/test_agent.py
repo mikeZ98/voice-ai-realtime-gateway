@@ -30,6 +30,7 @@ from voice_ai_realtime_gateway.telemetry.events import (
     ResponseTimeline,
     TaskFailed,
     TranscriptReceived,
+    TtsHalted,
     VadSpeechStarted,
 )
 from voice_ai_realtime_gateway.telemetry.ids import TraceContext
@@ -304,6 +305,9 @@ async def test_tts_halts_within_5_ms_of_the_barge_in(calls: list[Call]) -> None:
     assert tts.last_closed_ns is not None
     halt_ns = tts.last_closed_ns - onset
     assert 0 <= halt_ns < 5_000_000, f"TTS halted {halt_ns / 1e6:.3f} ms after the barge-in"
+    (halted,) = call.recorder.of_type(TtsHalted)
+    assert 0 <= halted.halt_ns < 5_000_000
+    assert halted.halt_ns >= halt_ns, "reported after the TTS stream had closed"
     assert tts.aborted == 1
     call.assert_generation_idle()
     await call.hangup()
@@ -522,3 +526,20 @@ async def test_many_concurrent_calls_with_barge_ins_stay_isolated(calls: list[Ca
         assert all(
             t.trace.session_id == call.trace.session_id for t in call.agent.conversation.turns
         )
+
+
+async def test_halt_is_reported_only_for_barge_ins(calls: list[Call]) -> None:
+    from voice_ai_realtime_gateway.transport.control import CancelResponse  # noqa: PLC0415
+
+    call = Call(tts=ToneTTS(pace_s=0.002), llm=ScriptedLLM(REPLY * 20))
+    calls.append(call)
+    await call.say("hello")
+    await call.receive_audio(1)
+    await call.client.control(CancelResponse())  # client cancel: not a barge-in onset
+    await call.until_flush()
+    await until(lambda: call.agent.session.state is SessionState.LISTENING)
+    await call.say("again")  # new turn; then hang up while the agent speaks
+    await call.receive_audio(1)
+    await call.hangup()
+    assert call.recorder.of_type(TtsHalted) == []
+    call.assert_no_orphans()

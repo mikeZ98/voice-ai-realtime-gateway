@@ -42,6 +42,7 @@ import time
 from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, final, override
 
+from voice_ai_realtime_gateway.domain.states import DrainReason
 from voice_ai_realtime_gateway.inference.capture import DEFAULT_PREROLL_MS, SpeechCapture
 from voice_ai_realtime_gateway.inference.chunker import ChunkerConfig, SentenceChunker
 from voice_ai_realtime_gateway.inference.conversation import (
@@ -52,12 +53,18 @@ from voice_ai_realtime_gateway.inference.conversation import (
 from voice_ai_realtime_gateway.inference.playback import PlaybackLedger, SpeechMap
 from voice_ai_realtime_gateway.inference.ports import FrameStamper
 from voice_ai_realtime_gateway.pipeline.runner import GatewaySessionRunner
-from voice_ai_realtime_gateway.telemetry.events import ResponseTimeline, TranscriptReceived
+from voice_ai_realtime_gateway.telemetry.events import (
+    ResponseTimeline,
+    TranscriptReceived,
+    TtsHalted,
+)
 from voice_ai_realtime_gateway.transport.websocket import IngressStream
+from voice_ai_realtime_gateway.vad.base import VadEvent
 
 if TYPE_CHECKING:
     from collections.abc import Sequence
 
+    from voice_ai_realtime_gateway.core.frames import AudioFrame
     from voice_ai_realtime_gateway.domain.clock import MonotonicClock
     from voice_ai_realtime_gateway.domain.duplex import DuplexSession
     from voice_ai_realtime_gateway.inference.capture import Utterance
@@ -67,7 +74,7 @@ if TYPE_CHECKING:
     from voice_ai_realtime_gateway.telemetry.ids import TraceContext
     from voice_ai_realtime_gateway.telemetry.sink import TelemetrySink
     from voice_ai_realtime_gateway.transport.base import VoiceTransport
-    from voice_ai_realtime_gateway.vad.base import StreamingVAD
+    from voice_ai_realtime_gateway.vad.base import StreamingVAD, VadDecision
 
 __all__ = ["AgentConfig", "VoiceAgentPipeline"]
 
@@ -131,6 +138,7 @@ class VoiceAgentPipeline:
         "_conversation",
         "_ledger",
         "_llm",
+        "_pending_halt",
         "_runner",
         "_sink",
         "_tts",
@@ -156,6 +164,7 @@ class VoiceAgentPipeline:
         self._clock = clock
         self._conversation = ConversationState() if conversation is None else conversation
         self._ledger = PlaybackLedger(transport, clock=clock)
+        self._pending_halt: tuple[TraceContext, int] | None = None
         self._capture = SpeechCapture(
             sink=sink,
             preroll_ms=self._config.preroll_ms,
@@ -170,7 +179,7 @@ class VoiceAgentPipeline:
             on_user_turn=self._on_user_turn,
             drain_timeout_s=self._config.drain_timeout_s,
             egress=self._ledger,
-            on_ingress=self._capture.observe,
+            on_ingress=self._observe,
             services=(self._recognise,),
         )
 
@@ -211,6 +220,19 @@ class VoiceAgentPipeline:
 
     # ------------------------------------------------------------------ recognition
 
+    def _observe(self, frame: AudioFrame, decision: VadDecision) -> None:
+        # The runner taps ingress *after* the bridge applied the decision, so for a
+        # barge-in onset the speak stage has already been cancelled and has recorded when
+        # its TTS stream closed. Pair the two; never attribute a halt to a later onset.
+        if decision.event is VadEvent.ONSET:
+            pending, self._pending_halt = self._pending_halt, None
+            if pending is not None and pending[1] >= decision.at_ns:
+                trace, halted_at = pending
+                self._sink.emit(
+                    TtsHalted(trace=trace, at_ns=halted_at, halt_ns=halted_at - decision.at_ns)
+                )
+        self._capture.observe(frame, decision)
+
     async def _recognise(self) -> None:
         try:
             async for utterance in self._capture:
@@ -245,6 +267,7 @@ class VoiceAgentPipeline:
     # ------------------------------------------------------------------ responding
 
     def _on_user_turn(self, session: DuplexSession) -> None:
+        self._pending_halt = None
         utterance = self._capture.last_completed
         if utterance is None:
             session.skip_response()
@@ -312,16 +335,21 @@ class VoiceAgentPipeline:
         stamper = FrameStamper(
             response.trace, sample_rate_hz=self._config.tts_sample_rate_hz, clock=self._clock
         )
-        while (unit := await units.get()) is not None:
-            response.speech.begin_unit(unit)
-            async with contextlib.aclosing(self._tts.synthesize(unit, stamper)) as audio:
-                async for synthesized in audio:
-                    frame = synthesized.frame
-                    if response.first_audio_ns is None:
-                        response.first_audio_ns = self._clock()
-                        session.begin_response()
-                    response.speech.add_frame(frame.duration_ns, synthesized.text_offset)
-                    await session.push_audio(frame)
+        try:
+            while (unit := await units.get()) is not None:
+                response.speech.begin_unit(unit)
+                async with contextlib.aclosing(self._tts.synthesize(unit, stamper)) as audio:
+                    async for synthesized in audio:
+                        frame = synthesized.frame
+                        if response.first_audio_ns is None:
+                            response.first_audio_ns = self._clock()
+                            session.begin_response()
+                        response.speech.add_frame(frame.duration_ns, synthesized.text_offset)
+                        await session.push_audio(frame)
+        except asyncio.CancelledError:
+            if session.machine.drain_reason is DrainReason.BARGE_IN:
+                self._pending_halt = (response.trace, self._clock())  # TTS stream closed now
+            raise
         if response.first_audio_ns is None:
             session.skip_response()
         else:
