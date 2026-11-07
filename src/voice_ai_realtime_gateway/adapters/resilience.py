@@ -222,9 +222,9 @@ class ProviderLink:
         close_kinds: Mapping[int, ErrorKind] = GENERIC_CLOSE_KINDS,
         clock: MonotonicClock = time.monotonic_ns,
         sleep: Sleeper = asyncio.sleep,
-        jitter: Callable[[], float] = _SYSTEM_RANDOM.random,
+        jitter: Callable[[], float] | None = None,
     ) -> None:
-        """Create an ``IDLE`` link."""
+        """Create an ``IDLE`` link (``jitter=None`` draws from the OS random source)."""
         self._provider = provider
         self._connector = connector
         self._sink = sink
@@ -233,7 +233,7 @@ class ProviderLink:
         self._close_kinds = close_kinds
         self._clock = clock
         self._sleep = sleep
-        self._jitter = jitter
+        self._jitter = _SYSTEM_RANDOM.random if jitter is None else jitter
         self._state = ProviderState.IDLE
         self._reconnects = 0
         self.attempts = 0
