@@ -1,4 +1,4 @@
-"""Shared fixtures: frame factories, telemetry doubles and a strict event-loop guard."""
+"""Shared fixtures: deterministic clocks, frame factories and a strict event-loop guard."""
 
 from __future__ import annotations
 
@@ -35,6 +35,19 @@ FRAME_NS = 20_000_000
 """20 ms media frames."""
 
 
+class FakeClock:
+    """Manually advanced monotonic nanosecond clock."""
+
+    def __init__(self, start: int = 1_000_000_000, step: int = 0) -> None:
+        self.now = start
+        self.step = step
+
+    def __call__(self) -> int:
+        current = self.now
+        self.now += self.step
+        return current
+
+
 class FrameFactory(Protocol):
     def __call__(
         self,
@@ -44,6 +57,11 @@ class FrameFactory(Protocol):
         sequence: int | None = ...,
         origin_ns: int = ...,
     ) -> AudioFrame: ...
+
+
+@pytest.fixture
+def clock() -> FakeClock:
+    return FakeClock()
 
 
 @pytest.fixture
