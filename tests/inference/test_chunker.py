@@ -221,3 +221,52 @@ def test_streaming_cost_is_linear_in_characters() -> None:
     elapsed = time.perf_counter() - started
     assert len(units) >= 400
     assert elapsed < 0.5, f"{len(tokens)} tokens took {elapsed:.3f}s"
+
+
+# ------------------------------------------------------------------ mutation-derived contracts
+
+
+def test_documented_defaults() -> None:
+    assert ChunkerConfig() == ChunkerConfig(
+        max_chars=200, first_clause_min_chars=16, clause_min_chars=60
+    )
+
+
+def test_clause_exactly_at_the_minimum_cuts_and_reuse_restores_the_first_unit_rule() -> None:
+    chunker = SentenceChunker(ChunkerConfig(first_clause_min_chars=6, clause_min_chars=40))
+    assert chunker.feed("Hello, world") == ["Hello,"], "6 chars == first_clause_min_chars"
+    assert chunker.flush() == ["world"]
+    assert chunker.feed("Again, more") == ["Again,"], "a new response gets the early cut again"
+
+
+def test_sentence_of_exactly_max_chars_is_kept_whole() -> None:
+    config = ChunkerConfig(max_chars=10, first_clause_min_chars=10, clause_min_chars=10)
+    assert chunk("abcd efgh. Ok.", config) == ["abcd efgh.", "Ok."]
+
+
+def test_overflow_is_measured_from_the_current_unit_start() -> None:
+    config = ChunkerConfig(max_chars=6, first_clause_min_chars=6, clause_min_chars=6)
+    assert chunk("aaaa. b c.", config) == ["aaaa.", "b c."]
+    # The overflow window of the 2nd unit ("b. c d") has whitespace after the sentence end,
+    # so measuring from the wrong origin would cut "b. c" instead of "b.".
+    assert chunk("aaaa. b. c d e", config) == ["aaaa.", "b.", "c d e"]
+
+
+def test_overflow_cut_on_window_edges() -> None:
+    config = ChunkerConfig(max_chars=10, first_clause_min_chars=10, clause_min_chars=10)
+    assert chunk("abcdefghi jklmn", config) == ["abcdefghi", "jklmn"], "window ends on a space"
+    tight = ChunkerConfig(max_chars=5, first_clause_min_chars=5, clause_min_chars=5)
+    assert chunk("a bbbbbbbbb", tight) == ["a", "bbbbb", "bbbb"], "a space at offset 1"
+
+
+@pytest.mark.parametrize(
+    ("text", "expected"),
+    [
+        ("Dr. Smith is here. Bye.", ["Dr. Smith is here.", "Bye."]),
+        ("It is OK. Next one.", ["It is OK.", "Next one."]),
+        ("Plan x. Then go.", ["Plan x.", "Then go."]),
+    ],
+)
+def test_abbreviation_edges(text: str, expected: list[str]) -> None:
+    config = ChunkerConfig(first_clause_min_chars=200, clause_min_chars=200, max_chars=200)
+    assert chunk(text, config) == expected

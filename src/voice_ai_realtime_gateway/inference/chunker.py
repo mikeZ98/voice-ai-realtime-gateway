@@ -99,15 +99,17 @@ class SentenceChunker:
     def feed(self, text: str) -> list[str]:
         """Append an LLM delta and return every unit it completed, in order."""
         self._buffer += text
-        return self._drain(final=False)
+        return self._drain()
 
     def flush(self) -> list[str]:
         """End of the response: emit everything left and reset for the next response.
 
         A remainder without any alphanumeric character (stray punctuation) carries no
-        speech and is dropped.
+        speech and is dropped. A deferred boundary can only sit at the very end of the
+        buffer, so emitting the remainder as one unit is exactly what resolving it would
+        produce.
         """
-        units = self._drain(final=True)
+        units = self._drain()
         rest = self._buffer.strip()
         self._buffer, self._scan, self._emitted = "", 0, 0
         if _has_speech(rest):
@@ -120,7 +122,7 @@ class SentenceChunker:
 
     # ------------------------------------------------------------------ scanning
 
-    def _drain(self, *, final: bool) -> list[str]:
+    def _drain(self) -> list[str]:
         buffer, max_chars = self._buffer, self._config.max_chars
         length = len(buffer)
         start = self._skip_space(buffer, 0)
@@ -129,7 +131,7 @@ class SentenceChunker:
         while True:
             cut: int | None = None
             while index < length:
-                end = self._boundary(buffer, index, start, final=final)
+                end = self._boundary(buffer, index, start)
                 if end == _WAIT:
                     break
                 if end is not None:
@@ -150,12 +152,12 @@ class SentenceChunker:
         self._scan = index - start
         return units
 
-    def _boundary(self, buffer: str, index: int, start: int, *, final: bool) -> int | None:
+    def _boundary(self, buffer: str, index: int, start: int) -> int | None:
         char = buffer[index]
         if char in _TERMINATORS or char in _CJK_TERMINATORS:
-            end = self._terminal_end(buffer, index, final=final)
+            end = self._terminal_end(buffer, index)
         elif char in _CLAUSE_MARKS:
-            end = self._clause_end(buffer, index, final=final)
+            end = self._clause_end(buffer, index)
             minimum = (
                 self._config.first_clause_min_chars
                 if self._emitted == 0
@@ -165,9 +167,9 @@ class SentenceChunker:
                 end = None
         else:
             return None
-        if end is None or end == _WAIT:
-            return end
-        return end if _has_speech(buffer[start:end]) else None
+        if end is not None and end != _WAIT and not _has_speech(buffer[start:end]):
+            return None
+        return end
 
     @staticmethod
     def _skip_space(buffer: str, position: int) -> int:
@@ -181,10 +183,10 @@ class SentenceChunker:
             position += 1
         return position
 
-    def _terminal_end(self, buffer: str, index: int, *, final: bool) -> int | None:
+    def _terminal_end(self, buffer: str, index: int) -> int | None:
         end = self._skip(buffer, self._skip(buffer, index + 1, _TERMINATORS), _CLOSERS)
         if end == len(buffer):
-            return end if final else _WAIT
+            return _WAIT
         if buffer[index] in _CJK_TERMINATORS:
             return end
         if not buffer[end].isspace():
@@ -193,10 +195,10 @@ class SentenceChunker:
             return None
         return end
 
-    def _clause_end(self, buffer: str, index: int, *, final: bool) -> int | None:
+    def _clause_end(self, buffer: str, index: int) -> int | None:
         end = self._skip(buffer, index + 1, _CLOSERS)
         if end == len(buffer):
-            return end if final else _WAIT
+            return _WAIT
         return end if buffer[end].isspace() else None
 
     @staticmethod
@@ -210,9 +212,11 @@ class SentenceChunker:
         return word.lower() in ABBREVIATIONS
 
     def _overflow_cut(self, buffer: str, start: int) -> int:
+        # ``start`` never points at whitespace, so the window holds speech-bearing text.
         limit = start + self._config.max_chars
         window = buffer[start:limit]
-        for offset in range(len(window) - 1, 0, -1):
-            if window[offset].isspace() and window[:offset].strip():
-                return start + offset
-        return limit
+        head = window.rstrip()
+        if len(head) < len(window):
+            return start + len(head)  # the window already ends on a word boundary
+        words = head.rsplit(None, 1)
+        return start + len(words[0]) if len(words) == 2 else limit  # noqa: PLR2004
