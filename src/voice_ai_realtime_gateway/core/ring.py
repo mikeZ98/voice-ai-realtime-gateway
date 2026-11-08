@@ -393,9 +393,12 @@ class AudioRingBuffer:
         try:
             await waiter
         finally:
-            # Woken waiters were already popped; cancelled ones must not linger.
-            with contextlib.suppress(ValueError):
-                waiters.remove(waiter)
+            # Woken waiters were already popped by _wake; only a cancelled one may linger.
+            # Checking first keeps the hot path cheap: a failed deque.remove() formats
+            # repr(future) into its error message (CPython 3.12+), ~4 us per wake-up.
+            if waiter.cancelled():
+                with contextlib.suppress(ValueError):
+                    waiters.remove(waiter)
 
     @staticmethod
     def _wake(waiters: deque[asyncio.Future[None]]) -> None:
