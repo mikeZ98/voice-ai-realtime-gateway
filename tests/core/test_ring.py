@@ -350,3 +350,22 @@ async def test_woken_then_cancelled_producer_does_not_lose_the_wakeup(
         await first
     await second
     assert buf.get_nowait() is second_frame
+
+
+# ------------------------------------------------------------------ mutation-derived contracts
+
+
+async def test_smallest_valid_budget_and_fresh_watermarks() -> None:
+    buf = ring(frames=1, nbytes=1)
+    assert buf.capacity_bytes == 1
+    stats = buf.stats()
+    assert (stats.high_watermark_frames, stats.high_watermark_bytes) == (0, 0)
+
+
+async def test_epoch_advances_by_exactly_one_per_fence() -> None:
+    buf = ring()
+    epochs = [buf.epoch]
+    for fence in (buf.abort, buf.reset, buf.reset, buf.abort):
+        fence()
+        epochs.append(buf.epoch)
+    assert epochs == [0, 1, 2, 3, 4]
