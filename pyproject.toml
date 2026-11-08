@@ -46,7 +46,7 @@ cache-dir = ".cache/uv"
 cache-dir = ".cache/ruff"
 target-version = "py312"
 line-length = 100
-src = ["src", "tests"]
+src = ["src", "tests", "benchmarks"]
 
 [tool.ruff.lint]
 select = ["ALL"]
@@ -64,6 +64,9 @@ ignore = [
     "S101",    # pytest is built on `assert`
     "PLR2004", # literal expectations are the point of a contract test
     "SLF001",  # white-box invariants are asserted on private state
+]
+"benchmarks/*.py" = [
+    "T201", # the CLI prints its summary; the JSON report is the artifact
 ]
 "scripts/*.py" = [
     "INP001", # standalone CLI scripts, not a package
@@ -103,7 +106,7 @@ enable_error_code = [
     "explicit-override",
 ]
 mypy_path = "src"
-files = ["src", "tests"]
+files = ["src", "tests", "benchmarks"]
 
 # --------------------------------------------------------------------------- #
 # pytest: network-free, warning-free, 100 % line + branch coverage.
@@ -112,7 +115,7 @@ files = ["src", "tests"]
 cache_dir = ".cache/pytest"
 minversion = "8.3"
 testpaths = ["tests"]
-pythonpath = ["tests"] # shared test doubles (tests/*_support.py)
+pythonpath = ["tests", "."] # shared test doubles (tests/*_support.py), benchmarks/
 addopts = [
     "-ra",
     "--strict-config",
