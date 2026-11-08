@@ -63,6 +63,11 @@ ignore = [
     "PLR2004", # literal expectations are the point of a contract test
     "SLF001",  # white-box invariants are asserted on private state
 ]
+"scripts/*.py" = [
+    "INP001", # standalone CLI scripts, not a package
+    "T201",   # CLI output is the point
+    "S603",   # subprocess runs sys.executable with a fixed argv, never a shell
+]
 
 [tool.ruff.lint.pydocstyle]
 convention = "google"

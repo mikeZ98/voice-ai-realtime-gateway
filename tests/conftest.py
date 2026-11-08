@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import gc
+import os
 from pathlib import Path
 from typing import TYPE_CHECKING, Protocol
 
@@ -20,8 +21,13 @@ if TYPE_CHECKING:
     from collections.abc import AsyncIterator
 
 # --------------------------------------------------------------------------- hygiene
-# Hypothesis state lives under ./.cache/ like every other tool cache.
-_HYPOTHESIS_HOME = Path(__file__).resolve().parent.parent / ".cache" / "hypothesis"
+# Hypothesis state lives under ./.cache/ like every other tool cache. The mutation
+# harness points each worker at a private home and a fast, derandomised profile so
+# mutants never pollute the shared example database.
+_HYPOTHESIS_HOME = Path(
+    os.environ.get("VOICE_GATEWAY_HYPOTHESIS_HOME")
+    or Path(__file__).resolve().parent.parent / ".cache" / "hypothesis"
+)
 set_hypothesis_home_dir(_HYPOTHESIS_HOME)
 settings.register_profile(
     "gateway",
@@ -29,7 +35,15 @@ settings.register_profile(
     deadline=None,
     suppress_health_check=[HealthCheck.too_slow],
 )
-settings.load_profile("gateway")
+settings.register_profile(
+    "mutation",
+    database=None,
+    derandomize=True,
+    max_examples=40,
+    deadline=None,
+    suppress_health_check=list(HealthCheck),
+)
+settings.load_profile(os.environ.get("VOICE_GATEWAY_HYPOTHESIS_PROFILE", "gateway"))
 
 FRAME_NS = 20_000_000
 """20 ms media frames."""
