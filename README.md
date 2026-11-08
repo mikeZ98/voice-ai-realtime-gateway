@@ -1,10 +1,12 @@
 # voice-ai-realtime-gateway
 
 [![Python 3.12+](https://img.shields.io/badge/python-3.12%2B-3776AB?logo=python&logoColor=white)](pyproject.toml)
-[![Coverage 100% (line + branch)](https://img.shields.io/badge/coverage-100%25%20line%20%2B%20branch-2EA043)](scripts/coverage-gate.sh)
+[![Ruff](https://img.shields.io/badge/code%20style-ruff-000000.svg)](pyproject.toml)
 [![mypy strict](https://img.shields.io/badge/mypy-strict-1F5082)](pyproject.toml)
-[![Mutation score 98.56%](https://img.shields.io/badge/mutation%20score-98.56%25-8A2BE2)](docs/PRODUCTION.md#6-mutation-testing)
+[![Coverage 100% (line + branch)](https://img.shields.io/badge/coverage-100%25%20line%20%2B%20branch-2EA043)](scripts/coverage-gate.sh)
 [![Network-free tests](https://img.shields.io/badge/tests-network--free-555555)](pyproject.toml)
+[![Committer mikeZ98](https://img.shields.io/badge/committer-mikeZ98-lightgrey.svg)](https://github.com/mikeZ98/voice-ai-realtime-gateway/commits/main)
+[![Mutation score 98.56%](https://img.shields.io/badge/mutation%20score-98.56%25-8A2BE2)](docs/PRODUCTION.md#6-mutation-testing)
 
 A full-duplex voice agent gateway for Python 3.12+ and asyncio: audio in, speech
 recognition, LLM, speech synthesis, audio out, over one WebSocket per call. It handles
