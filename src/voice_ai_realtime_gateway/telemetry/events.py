@@ -21,8 +21,10 @@ __all__ = [
     "FirstTokenLatency",
     "IngressGap",
     "PacketLatency",
+    "ProviderConnected",
     "ProviderError",
     "ResponseTimeline",
+    "SessionReaped",
     "StateTransitioned",
     "TaskFailed",
     "TelemetryEvent",
@@ -229,6 +231,26 @@ class ProviderError:
     detail: str
 
 
+@dataclass(frozen=True, slots=True, kw_only=True)
+class ProviderConnected:
+    """An upstream provider stream was established (a circuit-breaker success)."""
+
+    trace: TraceContext
+    at_ns: int
+    provider: str
+    attempt: int
+
+
+@dataclass(frozen=True, slots=True, kw_only=True)
+class SessionReaped:
+    """A zombie session outlived its admitted bounds and was force-isolated."""
+
+    trace: TraceContext
+    at_ns: int
+    age_ns: int
+    reason: str
+
+
 type TelemetryEvent = (
     VadSpeechStarted
     | VadSpeechStopped
@@ -246,4 +268,6 @@ type TelemetryEvent = (
     | EgressDropped
     | TtsHalted
     | ProviderError
+    | ProviderConnected
+    | SessionReaped
 )

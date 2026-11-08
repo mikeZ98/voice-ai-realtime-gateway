@@ -35,7 +35,7 @@ from enum import StrEnum, unique
 from types import MappingProxyType
 from typing import TYPE_CHECKING, Final, final, override
 
-from voice_ai_realtime_gateway.telemetry.events import ProviderError
+from voice_ai_realtime_gateway.telemetry.events import ProviderConnected, ProviderError
 from voice_ai_realtime_gateway.transport.errors import CloseCode, TransportClosedError
 
 if TYPE_CHECKING:
@@ -335,6 +335,14 @@ class ProviderLink:
                 await self._sleep(max(delay, error.retry_after_s or 0.0))
             else:
                 self._state = ProviderState.STREAMING
+                self._sink.emit(
+                    ProviderConnected(
+                        trace=self._trace,
+                        at_ns=self._clock(),
+                        provider=self._provider,
+                        attempt=attempt,
+                    )
+                )
                 return connection
 
     def _report(self, error: UpstreamError, *, attempt: int, fatal: bool | None = None) -> None:

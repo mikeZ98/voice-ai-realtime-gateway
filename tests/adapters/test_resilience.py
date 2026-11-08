@@ -15,7 +15,7 @@ from voice_ai_realtime_gateway.adapters.resilience import (
     UpstreamError,
     classify,
 )
-from voice_ai_realtime_gateway.telemetry.events import ProviderError
+from voice_ai_realtime_gateway.telemetry.events import ProviderConnected, ProviderError
 from voice_ai_realtime_gateway.transport.errors import CloseCode, TransportClosedError
 from voice_ai_realtime_gateway.transport.memory import MemoryWebSocket
 
@@ -159,6 +159,8 @@ async def test_transient_failures_back_off_then_recover(
     provider = link(connector, recorder, trace, sleeps, initial_backoff_s=0.1, jitter=0.0)
     await provider.open()
     assert sleeps.delays == [0.1, 0.2]
+    (connected,) = recorder.of_type(ProviderConnected)
+    assert (connected.provider, connected.attempt) == ("acme", 3)
     events = recorder.of_type(ProviderError)
     assert [(e.kind, e.fatal, e.attempt) for e in events] == [
         ("transient", False, 1),
