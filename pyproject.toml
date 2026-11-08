@@ -1,6 +1,6 @@
 [project]
 name = "voice-ai-realtime-gateway"
-version = "0.1.0"
+version = "0.5.0"
 description = "Ultra-low-latency full-duplex voice agent gateway: realtime session state machine, bounded zero-copy audio rings, and typed telemetry."
 readme = "README.md"
 authors = [
