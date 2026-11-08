@@ -83,8 +83,8 @@ direction-checked types.
 | 1003 | unsupported packet version, codec or format; audio that differs from `session.config` |
 | 1006 | network loss (observed, never sent) |
 | 1007 | malformed packet or control message, invalid values |
-| 1008 | foreign `X-Session-ID` (audio injection), control backlog flood |
-| 1009 | audio or control message above the configured limit |
+| 1008 | foreign `X-Session-ID` (audio injection), control backlog flood; since Phase 4 also oversized audio or control messages and control messages above the rate limit |
+| 1009 | a header-declared payload length above the limit (byte-stream decoding) |
 | 1011 | session fault, or a runner task failure |
 
 ## 4. Backpressure and bounded ingress

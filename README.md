@@ -42,11 +42,28 @@ Phase 3 adds the AI pipeline (`VoiceAgentPipeline`):
 - **End-to-end tracing** from the user's audio span to the response's first egress
   packet (`ResponseTimeline`).
 
+Phase 4 makes it deployable:
+
+- **Real-provider adapters.** `DeepgramStreamingASR`, `OpenAIRealtimeLLM` and
+  `CartesiaStreamingTTS` sit behind the Phase 3 ports, sharing a provider resilience
+  state machine: backoff with jitter, reconnect budgets, and fatal auth or quota
+  failures that end in `FAULT`. The ASR replays unfinalized audio after a drop; the LLM
+  sends the gateway's truncated history out of band.
+- **Operations.** Zero-dependency Prometheus metrics (sessions, ring bytes,
+  glass-to-glass, first token, TTS halt, drops, provider errors) and an ASGI
+  `/healthz` `/readyz` `/metrics` app.
+- **Security.** HS256 signed-token admission with tenant policy, concurrency caps,
+  session binding and codec limits. A control-message rate limit, 1008 size guards and
+  a slow-loris / maximum-duration watchdog protect each connection.
+- **Mutation testing.** `scripts/mutation-test.py` reaches 98.57 % killed mutants on
+  the barge-in path, chunker and ring.
+
 Design, the full transition matrix and the memory budget model are in
 [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md). The transport, data flow, wire protocol
 and overhead model are in [`docs/TRANSPORT.md`](docs/TRANSPORT.md). The inference
 pipeline, truncation mechanics and chunking model are in
-[`docs/INFERENCE.md`](docs/INFERENCE.md).
+[`docs/INFERENCE.md`](docs/INFERENCE.md). Adapters, resilience, metrics, admission and
+mutation results are in [`docs/PRODUCTION.md`](docs/PRODUCTION.md).
 
 ## Usage sketch
 
@@ -124,6 +141,7 @@ uv run pytest                              # network-free, warnings are errors
 ./scripts/coverage-gate.sh                 # 100.00 % line + branch, per file
 ./scripts/audit-attribution.sh             # sole-committer invariant
 ./scripts/audit-hygiene.sh                 # no absolute paths, artifacts or cache leaks
+uv run python scripts/mutation-test.py     # AST mutation score (>= 95 % required)
 ```
 
 Every tool cache (pytest, ruff, mypy, coverage, Hypothesis, uv) is redirected under
