@@ -19,7 +19,12 @@ metric                                                 type        source
 ``{provider,kind,fatal}``
 ``voice_gateway_transport_closed_total{code}``         counter     ``TransportClosed``
 ``voice_gateway_sessions_total{outcome}``              counter     :meth:`record_session`
+``voice_gateway_circuit_state{provider}``              gauge       :meth:`record_circuit`
+``voice_gateway_circuit_rejections_total{provider}``   counter     :meth:`record_circuit`
+``voice_gateway_sessions_reaped_total``                counter     ``SessionReaped``
 =====================================================  ==========  ======================
+
+Circuit state is exported as 0 (closed), 1 (half-open) or 2 (open).
 
 Live gauges are computed at scrape time from the registry, so they are never stale and
 cost nothing between scrapes. Label values are bounded enumerations, so cardinality is
@@ -38,6 +43,7 @@ from voice_ai_realtime_gateway.telemetry.events import (
     IngressGap,
     ProviderError,
     ResponseTimeline,
+    SessionReaped,
     TransportClosed,
     TtsHalted,
 )
@@ -50,21 +56,42 @@ from voice_ai_realtime_gateway.telemetry.metrics import (
 )
 
 if TYPE_CHECKING:
+    from voice_ai_realtime_gateway.production.circuit import CircuitState
     from voice_ai_realtime_gateway.telemetry.events import TelemetryEvent
+    from voice_ai_realtime_gateway.telemetry.ids import TraceContext
 
 __all__ = ["GatewayMetrics", "SessionRegistry", "TrackedCall"]
 
 _NS_PER_S: Final = 1e9
 _NS_PER_US: Final = 1e3
 GLASS_TO_GLASS_BUCKETS_S: Final = (0.1, 0.2, 0.3, 0.5, 0.75, 1.0, 1.5, 2.0, 3.0, 5.0)
+_CIRCUIT_LEVELS: Final = {"closed": 0.0, "half_open": 1.0, "open": 2.0}
 HALT_BUCKETS_US: Final = (50.0, 100.0, 250.0, 500.0, 1_000.0, 2_500.0, 5_000.0, 10_000.0, 50_000.0)
 
 
 class TrackedCall(Protocol):
-    """A live call as seen by the registry."""
+    """A live call as seen by the registry, the drain controller and the reaper."""
+
+    @property
+    def trace(self) -> TraceContext:
+        """The call's correlation context."""
+
+    @property
+    def started_ns(self) -> int:
+        """When the call started (monotonic)."""
+
+    @property
+    def deadline_ns(self) -> int:
+        """When the call's admitted duration ends (monotonic)."""
 
     def ring_bytes(self) -> int:
         """Audio payload bytes currently queued in the call's rings."""
+
+    async def terminate(self, code: int, reason: str, /) -> None:
+        """Close the client socket and let the call wind down."""
+
+    async def quarantine(self) -> None:
+        """Force-isolate the call (zombie reaping)."""
 
 
 @final
@@ -89,6 +116,10 @@ class SessionRegistry:
         """Live calls."""
         return len(self._calls)
 
+    def calls(self) -> tuple[TrackedCall, ...]:
+        """Snapshot of the live calls."""
+        return tuple(self._calls)
+
     def ring_bytes(self) -> int:
         """Audio bytes queued across every live call."""
         return sum(call.ring_bytes() for call in self._calls)
@@ -100,12 +131,15 @@ class GatewayMetrics:
 
     __slots__ = (
         "barge_ins",
+        "circuit_rejections",
+        "circuit_state",
         "egress_drops",
         "first_token",
         "glass_to_glass",
         "halt",
         "ingress_drops",
         "provider_errors",
+        "reaped",
         "registry",
         "sessions",
         "transport_closed",
@@ -187,6 +221,32 @@ class GatewayMetrics:
             )
         )
 
+        self.circuit_state = registry.register(
+            Gauge(
+                "voice_gateway_circuit_state",
+                "Upstream circuit breaker state: 0 closed, 1 half-open, 2 open.",
+                ("provider",),
+            )
+        )
+        self.circuit_rejections = registry.register(
+            Counter(
+                "voice_gateway_circuit_rejections_total",
+                "Calls refused at admission because an upstream circuit was open.",
+                ("provider",),
+            )
+        )
+        self.reaped = registry.register(
+            Counter("voice_gateway_sessions_reaped_total", "Zombie sessions force-isolated.")
+        )
+
+    def record_circuit(self, provider: str, state: CircuitState) -> None:
+        """Export a breaker transition (wire as ``CircuitRegistry(on_change=...)``)."""
+        self.circuit_state.labels(provider).set(_CIRCUIT_LEVELS[state])
+
+    def record_circuit_rejection(self, provider: str) -> None:
+        """Count a call refused because ``provider``'s circuit was open."""
+        self.circuit_rejections.labels(provider).inc()
+
     def record_session(self, outcome: str) -> None:
         """Count a session outcome (``admitted``, ``rejected``, ``completed``, ``faulted``)."""
         self.sessions.labels(outcome).inc()
@@ -217,3 +277,5 @@ class GatewayMetrics:
             self.provider_errors.labels(event.provider, event.kind, fatal).inc()
         elif isinstance(event, TransportClosed):
             self.transport_closed.labels(str(event.code)).inc()
+        elif isinstance(event, SessionReaped):
+            self.reaped.inc()

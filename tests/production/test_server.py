@@ -3,36 +3,43 @@
 from __future__ import annotations
 
 import asyncio
+import contextlib
 from typing import TYPE_CHECKING, Any
 
 import pytest
 
 from audio_support import pcm_frame
+from conftest import FakeClock
 from duplex_support import until
 from transport_support import Client, ManualSleeper
 from voice_ai_realtime_gateway.core.frames import AudioCodec, AudioFrame
 from voice_ai_realtime_gateway.inference.agent import VoiceAgentPipeline
 from voice_ai_realtime_gateway.inference.doubles import ScriptedLLM, ToneASR, ToneTTS
 from voice_ai_realtime_gateway.production.admission import TokenAuthenticator, TokenSigner
+from voice_ai_realtime_gateway.production.circuit import CircuitPolicy, CircuitRegistry
 from voice_ai_realtime_gateway.production.observability import GatewayMetrics, SessionRegistry
+from voice_ai_realtime_gateway.production.reaper import ZombieReaper
 from voice_ai_realtime_gateway.production.server import (
+    Admission,
+    CallContext,
     GatewayServer,
     ServerConfig,
     TenantPolicy,
+    _LiveCall,
 )
 from voice_ai_realtime_gateway.telemetry.ids import TraceContext, new_session_id
 from voice_ai_realtime_gateway.transport.control import Hangup
 from voice_ai_realtime_gateway.transport.errors import CloseCode, TransportClosedError
 from voice_ai_realtime_gateway.transport.framing import DecodedPacket
 from voice_ai_realtime_gateway.transport.memory import MemoryWebSocket
-from voice_ai_realtime_gateway.transport.websocket import HeartbeatConfig
+from voice_ai_realtime_gateway.transport.websocket import HeartbeatConfig, WebSocketVoiceTransport
 from voice_ai_realtime_gateway.vad.base import VadConfig
 from voice_ai_realtime_gateway.vad.energy import EnergyVAD
 
 if TYPE_CHECKING:
     from collections.abc import Callable
 
-    from voice_ai_realtime_gateway.production.server import CallContext, CallResult
+    from voice_ai_realtime_gateway.production.server import CallResult
 
 pytestmark = pytest.mark.usefixtures("strict_loop")
 
@@ -45,13 +52,21 @@ type HeaderFactory = Callable[[Harness, TraceContext], dict[str, str]]
 
 class Harness:
     def __init__(
-        self, *, max_sessions: int = 2, max_duration_s: float = 600.0, fail: bool = False
+        self,
+        *,
+        max_sessions: int = 2,
+        max_duration_s: float = 600.0,
+        fail: bool = False,
+        circuits: CircuitRegistry | None = None,
+        stubborn: asyncio.Event | None = None,
     ) -> None:
         self.sleeper = ManualSleeper()
         self.sessions = SessionRegistry()
         self.metrics = GatewayMetrics(self.sessions)
         self.closed: list[str] = []
         self.fail = fail
+        self.stubborn = stubborn
+        self.clock = FakeClock()
         self.server = GatewayServer(
             authenticator=TokenAuthenticator({"k1": KEY}, wall_clock=lambda: NOW),
             tenants={
@@ -71,6 +86,9 @@ class Harness:
                 media_timeout_s=5.0, heartbeat=HeartbeatConfig(interval_s=3600, timeout_s=3600)
             ),
             sleep=self.sleeper,
+            clock=self.clock,
+            circuits=circuits,
+            required_providers=("deepgram",),
         )
 
     def factory(self, context: CallContext) -> VoiceAgentPipeline:
@@ -79,7 +97,7 @@ class Harness:
 
         context.on_close(closer)
         llm = ScriptedLLM("Sure.") if not self.fail else ScriptedLLM(lambda _h, _u: 1 / 0)  # type: ignore[arg-type,return-value]
-        return VoiceAgentPipeline(
+        pipeline = VoiceAgentPipeline(
             transport=context.transport,
             vad=EnergyVAD(VadConfig(min_speech_ms=40, hangover_ms=60)),
             asr=ToneASR({1_000: "hello"}),
@@ -87,6 +105,16 @@ class Harness:
             tts=ToneTTS(),
             sink=context.sink,
         )
+        if self.stubborn is not None:
+            release = self.stubborn
+
+            async def ignores_cancellation() -> None:  # a hung upstream client
+                while not release.is_set():
+                    with contextlib.suppress(asyncio.CancelledError):
+                        await release.wait()
+
+            pipeline.runner._services = (ignores_cancellation,)
+        return pipeline
 
     def token(self, **claims: Any) -> str:  # noqa: ANN401 -- arbitrary claim values
         base: dict[str, Any] = {
@@ -275,3 +303,113 @@ def test_policies_are_validated() -> None:
         )
     with pytest.raises(ValueError, match="media_timeout_s"):
         ServerConfig(media_timeout_s=0)
+
+
+# ------------------------------------------------------------------------ self-healing
+
+
+async def test_open_upstream_circuit_refuses_calls_before_building_a_pipeline(
+    trace: TraceContext,
+) -> None:
+    circuits = CircuitRegistry(CircuitPolicy(min_calls=1, failure_ratio=1.0))
+    harness = Harness(circuits=circuits)
+    circuits._on_change = harness.metrics.record_circuit
+    circuits.breaker("deepgram").record_failure()
+    built = harness.closed
+    _, task = harness.connect(headers(harness.token(), trace))
+    result = await asyncio.wait_for(task, DEADLINE)
+    assert (result.close_code, result.close_reason) == (1013, "upstream unavailable")
+    assert built == [], "no pipeline was built for the refused call"
+    text = harness.metrics.render()
+    assert 'voice_gateway_circuit_rejections_total{provider="deepgram"} 1.0' in text
+    assert 'voice_gateway_circuit_state{provider="deepgram"} 2.0' in text
+
+
+async def test_close_all_ends_every_live_call(trace: TraceContext) -> None:
+    harness = Harness()
+    _, task = harness.connect(headers(harness.token(), trace))
+    await until(lambda: harness.server.active_calls("acme") == 1)
+    assert await harness.server.close_all(CloseCode.GOING_AWAY, "server shutting down") == 1
+    result = await asyncio.wait_for(task, DEADLINE)
+    assert (result.close_code, result.close_reason) == (1001, "server shutting down")
+
+
+async def test_reaper_isolates_a_wedged_zombie_without_touching_siblings(
+    trace: TraceContext,
+) -> None:
+    release = asyncio.Event()
+    harness = Harness(stubborn=release, max_duration_s=60.0)
+    reaper = ZombieReaper(harness.sessions, sink=harness.metrics, grace_s=5, clock=harness.clock)
+    _, zombie = harness.connect(headers(harness.token(max_duration_s=60), trace))
+    await until(lambda: harness.server.active_calls("acme") == 1)
+    harness.clock.now += 30 * 1_000_000_000
+    harness.stubborn = None  # the sibling is healthy
+    sibling_client, sibling = harness.connect(headers(harness.token(), TraceContext.new()))
+    await until(lambda: harness.server.active_calls("acme") == 2)
+    assert await reaper.sweep() == 0, "nobody is past deadline + grace yet"
+    harness.clock.now += 36 * 1_000_000_000  # zombie: 66 s old > 60 s + 5 s; sibling: 36 s
+    assert await reaper.sweep() == 1
+    assert reaper.reaped == 1
+    assert harness.server.active_calls("acme") == 1, "the zombie's slot is freed even while wedged"
+    assert len(harness.sessions) == 1
+    assert not zombie.done(), "the zombie is still wedged in its hung service"
+    assert not sibling.done(), "the sibling is untouched"
+    assert "voice_gateway_sessions_reaped_total 1.0" in harness.metrics.render()
+    release.set()
+    with pytest.raises(asyncio.CancelledError):
+        await asyncio.wait_for(zombie, DEADLINE)
+    await sibling_client.control(Hangup("bye"))
+    assert (await asyncio.wait_for(sibling, DEADLINE)).admitted
+
+
+async def test_reaper_runs_periodically_and_validates(trace: TraceContext) -> None:
+    sweeps: list[float] = []
+
+    async def sleep(delay: float) -> None:
+        sweeps.append(delay)
+        await asyncio.sleep(0)
+
+    reaper = ZombieReaper(
+        SessionRegistry(), sink=GatewayMetrics(SessionRegistry()), interval_s=2, sleep=sleep
+    )
+    task = asyncio.create_task(reaper.run())
+    await until(lambda: len(sweeps) >= 3)
+    task.cancel()
+    with pytest.raises(asyncio.CancelledError):
+        await task
+    assert set(sweeps) == {2}
+    with pytest.raises(ValueError, match="positive"):
+        ZombieReaper(SessionRegistry(), sink=GatewayMetrics(SessionRegistry()), grace_s=0)
+    del trace
+
+
+async def test_healthy_circuits_admit_calls(trace: TraceContext) -> None:
+    harness = Harness(circuits=CircuitRegistry())
+    client, task = harness.connect(headers(harness.token(), trace))
+    await until(lambda: harness.server.active_calls("acme") == 1)
+    await client.control(Hangup("bye"))
+    assert (await asyncio.wait_for(task, DEADLINE)).admitted
+
+
+async def test_quarantining_a_call_whose_task_already_finished_only_releases_it(
+    trace: TraceContext,
+) -> None:
+    harness = Harness()
+    released: list[bool] = []
+    server_end, _ = MemoryWebSocket.pair()
+    grant = harness.server._authenticator.verify(harness.token())
+    admission = Admission(grant=grant, trace=trace, codecs=grant.codecs, max_duration_s=60)
+    transport = WebSocketVoiceTransport(server_end, trace=trace, sink=harness.metrics)
+    pipeline = harness.factory(CallContext(transport, admission, harness.metrics))
+
+    async def register() -> _LiveCall:
+        return _LiveCall(
+            transport, pipeline, started_ns=0, deadline_ns=1, release=lambda: released.append(True)
+        )
+
+    live = await asyncio.create_task(register())
+    assert live.task is not None
+    assert live.task.done()
+    await live.quarantine()
+    assert released == [True]
+    assert pipeline.session.faulted

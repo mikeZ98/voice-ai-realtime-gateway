@@ -50,12 +50,13 @@ from voice_ai_realtime_gateway.transport.websocket import (
 )
 
 if TYPE_CHECKING:
-    from collections.abc import Awaitable, Callable, Mapping
+    from collections.abc import Awaitable, Callable, Mapping, Sequence
 
     from voice_ai_realtime_gateway.domain.clock import MonotonicClock
     from voice_ai_realtime_gateway.inference.agent import VoiceAgentPipeline
     from voice_ai_realtime_gateway.pipeline.runner import RunOutcome
     from voice_ai_realtime_gateway.production.admission import AdmissionGrant, TokenAuthenticator
+    from voice_ai_realtime_gateway.production.circuit import CircuitRegistry
     from voice_ai_realtime_gateway.production.observability import (
         GatewayMetrics,
         SessionRegistry,
@@ -183,16 +184,43 @@ class CallResult:
 
 @final
 class _LiveCall:
-    __slots__ = ("pipeline", "transport")
+    """Registry entry of one running call (drain, reaper and gauges act through it)."""
 
-    def __init__(self, transport: WebSocketVoiceTransport, pipeline: VoiceAgentPipeline) -> None:
+    __slots__ = ("_release", "deadline_ns", "pipeline", "started_ns", "task", "trace", "transport")
+
+    def __init__(
+        self,
+        transport: WebSocketVoiceTransport,
+        pipeline: VoiceAgentPipeline,
+        *,
+        started_ns: int,
+        deadline_ns: int,
+        release: Callable[[], None],
+    ) -> None:
         self.transport = transport
         self.pipeline = pipeline
+        self.trace = transport.trace
+        self.started_ns = started_ns
+        self.deadline_ns = deadline_ns
+        self.task = asyncio.current_task()
+        self._release = release
 
     def ring_bytes(self) -> int:
         current = self.pipeline.capture.current
         utterance = current.ring.nbytes if current is not None else 0
         return self.transport.ingress_ring.nbytes + self.pipeline.session.ring.nbytes + utterance
+
+    async def terminate(self, code: int, reason: str) -> None:
+        """Close the client socket; the call then winds down through its normal path."""
+        await self.transport.close(code, reason)
+
+    async def quarantine(self) -> None:
+        """Force-isolate a zombie: close, fault the session, cancel its task, free its slot."""
+        await self.transport.close(CloseCode.INTERNAL_ERROR, "session quarantined")
+        await self.pipeline.session.abort()
+        if self.task is not None and not self.task.done():
+            self.task.cancel()
+        self._release()
 
 
 @final
@@ -201,12 +229,14 @@ class GatewayServer:
 
     __slots__ = (
         "_authenticator",
+        "_circuits",
         "_clock",
         "_config",
         "_draining",
         "_factory",
         "_metrics",
         "_per_tenant",
+        "_required",
         "_sessions",
         "_sink",
         "_sleep",
@@ -225,8 +255,14 @@ class GatewayServer:
         config: ServerConfig | None = None,
         clock: MonotonicClock = time.monotonic_ns,
         sleep: Sleeper = asyncio.sleep,
+        circuits: CircuitRegistry | None = None,
+        required_providers: Sequence[str] = (),
     ) -> None:
-        """Serve calls built by ``factory``; ``sink`` defaults to ``metrics``."""
+        """Serve calls built by ``factory``; ``sink`` defaults to ``metrics``.
+
+        With ``circuits``, a call is refused (``1013``) while any of
+        ``required_providers`` has an open circuit, before any pipeline is built.
+        """
         self._authenticator = authenticator
         self._tenants = dict(tenants)
         self._metrics = metrics
@@ -238,6 +274,8 @@ class GatewayServer:
         self._sleep = sleep
         self._draining = False
         self._per_tenant: Tally[str] = Tally()
+        self._circuits = circuits
+        self._required = tuple(required_providers)
 
     @property
     def ready(self) -> bool:
@@ -269,9 +307,15 @@ class GatewayServer:
         codecs = grant.codecs & policy.allowed_codecs
         if not codecs:
             _refuse("no permitted codec")
+        trace = self._trace(headers, grant)
+        if self._circuits is not None:
+            blocked = self._circuits.blocking(self._required)
+            if blocked is not None:
+                self._metrics.record_circuit_rejection(blocked)
+                _refuse("upstream unavailable", code=CloseCode.TRY_AGAIN_LATER)
         return Admission(
             grant=grant,
-            trace=self._trace(headers, grant),
+            trace=trace,
             codecs=codecs,
             max_duration_s=min(grant.max_duration_s, policy.max_session_duration_s),
         )
@@ -302,15 +346,34 @@ class GatewayServer:
         try:
             admission = self.admit(headers)
         except AdmissionError as refusal:
-            self._metrics.record_session("rejected")
-            await connection.close(refusal.code, refusal.reason)
-            return CallResult(
-                admitted=False,
-                close_code=refusal.code,
-                close_reason=refusal.reason,
-                tenant=None,
-                outcome=None,
-            )
+            return await self.refuse(connection, refusal)
+        return await self.serve(connection, admission)
+
+    async def refuse(self, connection: WebSocketConnection, refusal: AdmissionError) -> CallResult:
+        """Close ``connection`` with the refusal's code and reason, and account for it."""
+        self._metrics.record_session("rejected")
+        await connection.close(refusal.code, refusal.reason)
+        return CallResult(
+            admitted=False,
+            close_code=refusal.code,
+            close_reason=refusal.reason,
+            tenant=None,
+            outcome=None,
+        )
+
+    async def close_all(self, code: int, reason: str) -> int:
+        """Close every live call's socket (drain deadline); returns how many."""
+        calls = self._sessions.calls()
+        for call in calls:
+            await call.terminate(code, reason)
+        return len(calls)
+
+    async def serve(self, connection: WebSocketConnection, admission: Admission) -> CallResult:
+        """Run an already admitted call to completion.
+
+        Raises:
+            ExceptionGroup: if the call's pipeline failed internally (after cleanup).
+        """
         tenant = admission.grant.tenant
         self._metrics.record_session("admitted")
         transport = WebSocketVoiceTransport(
@@ -324,9 +387,25 @@ class GatewayServer:
         )
         context = CallContext(transport, admission, self._sink)
         pipeline = self._factory(context)
-        live = _LiveCall(transport, pipeline)
-        self._sessions.add(live)
         self._per_tenant[tenant] += 1
+        released = False
+
+        def release() -> None:
+            nonlocal released
+            if not released:
+                released = True
+                self._per_tenant[tenant] -= 1
+                self._sessions.discard(live)
+
+        started = self._clock()
+        live = _LiveCall(
+            transport,
+            pipeline,
+            started_ns=started,
+            deadline_ns=started + int(admission.max_duration_s * 1e9),
+            release=release,
+        )
+        self._sessions.add(live)
         watchdog = asyncio.create_task(self._watchdog(transport, admission.max_duration_s))
         outcome: RunOutcome | None = None
         try:
@@ -335,8 +414,7 @@ class GatewayServer:
             watchdog.cancel()
             with contextlib.suppress(asyncio.CancelledError):
                 await watchdog
-            self._sessions.discard(live)
-            self._per_tenant[tenant] -= 1
+            release()
             await context.close()
             self._metrics.record_session(
                 "faulted" if outcome is None or outcome.faulted else "completed"

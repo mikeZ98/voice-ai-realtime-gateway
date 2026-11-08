@@ -2,8 +2,6 @@
 
 from __future__ import annotations
 
-from typing import TYPE_CHECKING
-
 from voice_ai_realtime_gateway.production.observability import GatewayMetrics, SessionRegistry
 from voice_ai_realtime_gateway.telemetry.events import (
     BargeInHandled,
@@ -17,17 +15,24 @@ from voice_ai_realtime_gateway.telemetry.events import (
     TtsHalted,
     VadSpeechStarted,
 )
-
-if TYPE_CHECKING:
-    from voice_ai_realtime_gateway.telemetry.ids import TraceContext
+from voice_ai_realtime_gateway.telemetry.ids import TraceContext
 
 
 class Call:
     def __init__(self, nbytes: int) -> None:
         self.nbytes = nbytes
+        self.trace = TraceContext.new()
+        self.started_ns = 0
+        self.deadline_ns = 0
 
     def ring_bytes(self) -> int:
         return self.nbytes
+
+    async def terminate(self, code: int, reason: str, /) -> None:
+        del code, reason
+
+    async def quarantine(self) -> None:
+        return None
 
 
 def timeline(trace: TraceContext, egress: int | None) -> ResponseTimeline:
