@@ -1,0 +1,18 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: voice-gateway-config
+  labels:
+    app.kubernetes.io/name: voice-gateway
+data:
+  GATEWAY_TENANTS: |
+    {"default": {"max_concurrent_sessions": 200, "max_session_duration_s": 1800, "codecs": ["pcm16"]}}
+  GATEWAY_AUDIENCE: voice-gateway
+  GATEWAY_WEBSOCKET_PATH: /v1/voice
+  # Phase 1 budget for live calls; the preStop timeout and the termination grace period
+  # below are derived from it (30 + 5 s forced-close grace + 15 s final scrape = 50 s).
+  GATEWAY_DRAIN_TIMEOUT_S: "30"
+  GATEWAY_FINAL_SCRAPE_GRACE_S: "15"
+  GATEWAY_MEDIA_TIMEOUT_S: "10"
+  GATEWAY_REAPER_GRACE_S: "30"
+  GATEWAY_REQUIRED_PROVIDERS: ""

@@ -1,0 +1,19 @@
+# kubectl apply -k deploy/k8s
+#
+# Prerequisite (never committed): the signing keys secret, for example
+#   kubectl create secret generic voice-gateway-keys \
+#     --from-literal=GATEWAY_KEYS="k1=$(openssl rand -base64 48 | tr '+/' '-_' | tr -d '=')"
+#
+# Autoscaling: keda-scaledobject.yaml (KEDA + Prometheus) is the default. hpa.yaml is the
+# alternative for clusters running prometheus-adapter; include exactly one of the two.
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+labels:
+  - pairs:
+      app.kubernetes.io/part-of: voice-gateway
+resources:
+  - configmap.yaml
+  - deployment.yaml
+  - service.yaml
+  - pdb.yaml
+  - keda-scaledobject.yaml

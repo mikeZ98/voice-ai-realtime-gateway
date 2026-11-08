@@ -1,0 +1,14 @@
+# Voluntary disruptions (node drains, upgrades) evict one pod at a time; each evicted
+# pod still runs its preStop drain, so calls finish instead of being cut.
+apiVersion: policy/v1
+kind: PodDisruptionBudget
+metadata:
+  name: voice-gateway
+  labels:
+    app.kubernetes.io/name: voice-gateway
+spec:
+  maxUnavailable: 1
+  unhealthyPodEvictionPolicy: AlwaysAllow
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: voice-gateway

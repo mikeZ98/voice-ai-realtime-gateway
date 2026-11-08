@@ -1,0 +1,36 @@
+# Alternative to keda-scaledobject.yaml for clusters with prometheus-adapter exposing
+# voice_gateway_active_sessions_count as a per-pod custom metric. Use one, not both.
+apiVersion: autoscaling/v2
+kind: HorizontalPodAutoscaler
+metadata:
+  name: voice-gateway
+  labels:
+    app.kubernetes.io/name: voice-gateway
+spec:
+  scaleTargetRef:
+    apiVersion: apps/v1
+    kind: Deployment
+    name: voice-gateway
+  minReplicas: 3
+  maxReplicas: 60
+  metrics:
+    - type: Pods
+      pods:
+        metric:
+          name: voice_gateway_active_sessions_count
+        target:
+          type: AverageValue
+          averageValue: "150"
+  behavior:
+    scaleUp:
+      stabilizationWindowSeconds: 0
+      policies:
+        - type: Percent
+          value: 100
+          periodSeconds: 30
+    scaleDown:
+      stabilizationWindowSeconds: 600
+      policies:
+        - type: Pods
+          value: 1
+          periodSeconds: 120

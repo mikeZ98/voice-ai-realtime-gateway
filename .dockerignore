@@ -1,0 +1,9 @@
+# Build context: only what the image needs (pyproject, lock, README, src, runtime lock).
+*
+!pyproject.toml
+!uv.lock
+!README.md
+!src/
+!deploy/requirements-runtime.txt
+**/__pycache__
+**/*.py[cod]

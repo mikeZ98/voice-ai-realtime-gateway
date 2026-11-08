@@ -1,0 +1,119 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: voice-gateway
+  labels:
+    app.kubernetes.io/name: voice-gateway
+    app.kubernetes.io/component: media-gateway
+spec:
+  replicas: 3
+  revisionHistoryLimit: 5
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: voice-gateway
+  strategy:
+    type: RollingUpdate
+    rollingUpdate:
+      maxUnavailable: 0 # never drop below capacity: old pods drain while new ones serve
+      maxSurge: 25%
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: voice-gateway
+        app.kubernetes.io/component: media-gateway
+      annotations:
+        prometheus.io/scrape: "true"
+        prometheus.io/port: "8080"
+        prometheus.io/path: /metrics
+    spec:
+      # > preStop timeout (55 s) + uvicorn graceful shutdown (10 s), so SIGKILL never
+      # lands on a pod that is still draining.
+      terminationGracePeriodSeconds: 75
+      automountServiceAccountToken: false
+      enableServiceLinks: false
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 10001
+        runAsGroup: 10001
+        fsGroup: 10001
+        seccompProfile:
+          type: RuntimeDefault
+      topologySpreadConstraints:
+        - maxSkew: 1
+          topologyKey: topology.kubernetes.io/zone
+          whenUnsatisfiable: ScheduleAnyway
+          labelSelector:
+            matchLabels:
+              app.kubernetes.io/name: voice-gateway
+        - maxSkew: 1
+          topologyKey: kubernetes.io/hostname
+          whenUnsatisfiable: ScheduleAnyway
+          labelSelector:
+            matchLabels:
+              app.kubernetes.io/name: voice-gateway
+      containers:
+        - name: gateway
+          image: ghcr.io/mikez98/voice-ai-realtime-gateway:0.5.0
+          imagePullPolicy: IfNotPresent
+          ports:
+            - name: http
+              containerPort: 8080
+              protocol: TCP
+          envFrom:
+            - configMapRef:
+                name: voice-gateway-config
+            - secretRef:
+                name: voice-gateway-keys
+          resources:
+            requests:
+              cpu: "1"
+              memory: 512Mi
+            limits:
+              memory: 1Gi
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            privileged: false
+            capabilities:
+              drop: ["ALL"]
+          startupProbe:
+            httpGet:
+              path: /healthz
+              port: http
+            periodSeconds: 1
+            failureThreshold: 30
+          livenessProbe:
+            httpGet:
+              path: /healthz
+              port: http
+            periodSeconds: 10
+            timeoutSeconds: 2
+            failureThreshold: 3
+          readinessProbe:
+            httpGet:
+              path: /readyz
+              port: http
+            periodSeconds: 2
+            timeoutSeconds: 1
+            failureThreshold: 2 # out of the endpoints within ~4 s of the drain starting
+          lifecycle:
+            preStop:
+              exec:
+                command:
+                  - python
+                  - -m
+                  - voice_ai_realtime_gateway.deploy.drain
+                  - --pid
+                  - "1"
+                  - --url
+                  - http://127.0.0.1:8080/drainz
+                  - --timeout
+                  - "55"
+          volumeMounts:
+            - name: tmp
+              mountPath: /tmp
+      volumes:
+        - name: tmp
+          emptyDir:
+            medium: Memory
+            sizeLimit: 16Mi
