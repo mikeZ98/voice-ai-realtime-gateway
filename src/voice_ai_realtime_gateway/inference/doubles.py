@@ -53,7 +53,8 @@ def pcm16_peak(payload: memoryview) -> int:
     if count == 0:
         return 0
     samples: tuple[int, ...] = struct.unpack_from(f"<{count}h", payload)
-    return max(abs(sample) for sample in samples)
+    loudest, quietest = max(samples), min(samples)  # C-level scans, no per-sample genexpr
+    return max(loudest, -quietest)
 
 
 @final
