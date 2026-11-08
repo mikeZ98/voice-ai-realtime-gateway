@@ -74,3 +74,13 @@ async def test_lifespan_and_stray_websockets() -> None:
         "lifespan.shutdown.complete",
         "websocket.close",
     ]
+
+
+async def test_drainz_reports_drain_completion_only_when_wired() -> None:
+    state = {"drained": False}
+    app = StatusApp(metrics=lambda: "", ready=lambda: False, drained=lambda: state["drained"])
+    assert (await request(app, "/drainz"))[::2] == (503, b"draining\n")
+    state["drained"] = True
+    assert (await request(app, "/drainz"))[::2] == (200, b"drained\n")
+    unwired = StatusApp(metrics=lambda: "", ready=lambda: True)
+    assert (await request(unwired, "/drainz"))[0] == 404

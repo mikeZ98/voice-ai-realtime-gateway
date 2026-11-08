@@ -4,6 +4,9 @@
 * ``GET /readyz``  -- readiness: 200 while new calls are accepted; 503 while draining,
   so load balancers stop routing before shutdown.
 * ``GET /metrics`` -- Prometheus text exposition.
+* ``GET /drainz``  -- drain completion (when wired): 200 once draining has finished,
+  503 before. A Kubernetes ``preStop`` hook polls it so ``SIGTERM`` only arrives once
+  live calls are done.
 
 ``HEAD`` is supported; other methods get 405 with ``Allow``; unknown paths get 404.
 Responses are ``no-store``. The ASGI ``lifespan`` protocol is acknowledged, and other
@@ -40,12 +43,19 @@ _HTTP_UNAVAILABLE: Final = 503
 class StatusApp:
     """ASGI 3 application exposing health, readiness and metrics."""
 
-    __slots__ = ("_metrics", "_ready")
+    __slots__ = ("_drained", "_metrics", "_ready")
 
-    def __init__(self, *, metrics: Callable[[], str], ready: Callable[[], bool]) -> None:
-        """Serve ``metrics()`` on ``/metrics`` and readiness from ``ready()``."""
+    def __init__(
+        self,
+        *,
+        metrics: Callable[[], str],
+        ready: Callable[[], bool],
+        drained: Callable[[], bool] | None = None,
+    ) -> None:
+        """Serve ``metrics()``, readiness from ``ready()`` and ``/drainz`` from ``drained()``."""
         self._metrics = metrics
         self._ready = ready
+        self._drained = drained
 
     async def __call__(self, scope: Mapping[str, object], receive: Receive, send: Send) -> None:
         """Handle one ASGI connection."""
@@ -80,6 +90,10 @@ class StatusApp:
             ready = self._ready()
             status = _HTTP_OK if ready else _HTTP_UNAVAILABLE
             body, content_type = (b"ready\n" if ready else b"draining\n"), _TEXT
+        elif path == "/drainz" and self._drained is not None:
+            done = self._drained()
+            status = _HTTP_OK if done else _HTTP_UNAVAILABLE
+            body, content_type = (b"drained\n" if done else b"draining\n"), _TEXT
         elif path == "/metrics":
             status, body, content_type = _HTTP_OK, self._metrics().encode(), CONTENT_TYPE.encode()
         else:
