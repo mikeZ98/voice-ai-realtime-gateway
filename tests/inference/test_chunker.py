@@ -270,3 +270,16 @@ def test_overflow_cut_on_window_edges() -> None:
 def test_abbreviation_edges(text: str, expected: list[str]) -> None:
     config = ChunkerConfig(first_clause_min_chars=200, clause_min_chars=200, max_chars=200)
     assert chunk(text, config) == expected
+
+
+def test_abbreviation_lookback_stops_at_the_unit_start_after_a_hard_cut() -> None:
+    # Regression (found by the split-invariance fuzzer): a hard overflow cut leaves no
+    # whitespace before the next unit. The abbreviation scan used to run back into the
+    # previous unit only when that text was still buffered, i.e. depending on how the
+    # stream happened to be split.
+    config = ChunkerConfig(max_chars=9, first_clause_min_chars=1, clause_min_chars=1)
+    text = "HelloJ.J.Dr. Hello"
+    expected = ["HelloJ.J.", "Dr. Hello"]
+    assert chunk(text, config) == expected
+    assert chunk(text, config, pieces=[1] * len(text)) == expected
+    assert chunk(text, config, pieces=[1, 9]) == expected

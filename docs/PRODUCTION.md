@@ -150,9 +150,14 @@ the audio ring (buffer overflow logic).
 | Target | Mutants | Killed | Score |
 |---|---|---|---|
 | barge-in critical path (`domain/duplex.py`) | 44 | 44 | **100.00 %** |
-| sentence chunker (`inference/chunker.py`) | 94 | 91 | **96.81 %** |
+| sentence chunker (`inference/chunker.py`) | 93 | 90 | **96.77 %** |
 | audio ring / overflow (`core/ring.py`) | 72 | 72 | **100.00 %** |
-| **overall** | **210** | **207** | **98.57 %** |
+| **overall** | **209** | **206** | **98.56 %** |
+
+v0.4.0 measured 207 / 210 (98.57 %). In v0.5.0 the abbreviation lookback became
+bounded by the unit start (a split-invariance bug found by the fuzzer), which replaced
+a mutable `0` literal with a name. That leaves 93 chunker mutants, the same 3
+equivalent survivors, and an overall score of 98.56 %.
 
 The first run scored 86.19 %. The survivors were triaged one by one:
 

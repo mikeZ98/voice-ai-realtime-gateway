@@ -155,7 +155,7 @@ class SentenceChunker:
     def _boundary(self, buffer: str, index: int, start: int) -> int | None:
         char = buffer[index]
         if char in _TERMINATORS or char in _CJK_TERMINATORS:
-            end = self._terminal_end(buffer, index)
+            end = self._terminal_end(buffer, index, start)
         elif char in _CLAUSE_MARKS:
             end = self._clause_end(buffer, index)
             minimum = (
@@ -183,7 +183,7 @@ class SentenceChunker:
             position += 1
         return position
 
-    def _terminal_end(self, buffer: str, index: int) -> int | None:
+    def _terminal_end(self, buffer: str, index: int, start: int) -> int | None:
         end = self._skip(buffer, self._skip(buffer, index + 1, _TERMINATORS), _CLOSERS)
         if end == len(buffer):
             return _WAIT
@@ -191,7 +191,7 @@ class SentenceChunker:
             return end
         if not buffer[end].isspace():
             return None
-        if buffer[index] == "." and self._is_abbreviation(buffer, index):
+        if buffer[index] == "." and self._is_abbreviation(buffer, index, start):
             return None
         return end
 
@@ -202,9 +202,12 @@ class SentenceChunker:
         return end if buffer[end].isspace() else None
 
     @staticmethod
-    def _is_abbreviation(buffer: str, dot: int) -> bool:
+    def _is_abbreviation(buffer: str, dot: int, start: int) -> bool:
+        # The word never extends before the unit start: whether earlier text is still
+        # buffered depends on how the stream was split (a hard overflow cut leaves no
+        # whitespace to stop at), and boundaries must not.
         begin = dot
-        while begin > 0 and (buffer[begin - 1].isalpha() or buffer[begin - 1] == "."):
+        while begin > start and (buffer[begin - 1].isalpha() or buffer[begin - 1] == "."):
             begin -= 1
         word = buffer[begin:dot]
         if len(word) == 1 and word.isupper():

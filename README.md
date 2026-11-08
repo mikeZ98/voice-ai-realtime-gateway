@@ -3,7 +3,7 @@
 [![Python 3.12+](https://img.shields.io/badge/python-3.12%2B-3776AB?logo=python&logoColor=white)](pyproject.toml)
 [![Coverage 100% (line + branch)](https://img.shields.io/badge/coverage-100%25%20line%20%2B%20branch-2EA043)](scripts/coverage-gate.sh)
 [![mypy strict](https://img.shields.io/badge/mypy-strict-1F5082)](pyproject.toml)
-[![Mutation score 98.57%](https://img.shields.io/badge/mutation%20score-98.57%25-8A2BE2)](docs/PRODUCTION.md#6-mutation-testing)
+[![Mutation score 98.56%](https://img.shields.io/badge/mutation%20score-98.56%25-8A2BE2)](docs/PRODUCTION.md#6-mutation-testing)
 [![Network-free tests](https://img.shields.io/badge/tests-network--free-555555)](pyproject.toml)
 
 A full-duplex voice agent gateway for Python 3.12+ and asyncio: audio in, speech
@@ -115,7 +115,7 @@ sequenceDiagram
 | Barge-in to `DRAINING` (budget 15 ms) | **p50 22 µs, p99 27 µs**, max 97 µs | [`ARCHITECTURE.md`](docs/ARCHITECTURE.md) |
 | TTS halted after barge-in onset (budget 5 ms) | **p50 242 µs, p99 434 µs** | [`INFERENCE.md`](docs/INFERENCE.md) |
 | Ingress cost per 20 ms frame (decode, checks, ring, VAD) | ≈ 10 µs, 0.05 % of a core per call | [`TRANSPORT.md`](docs/TRANSPORT.md) |
-| Mutation score: barge-in, chunker, ring | **98.57 %** (207 / 210; 3 documented equivalent mutants) | `scripts/mutation-test.py` |
+| Mutation score: barge-in, chunker, ring | **98.56 %** (206 / 209; 3 documented equivalent mutants) | `scripts/mutation-test.py` |
 | Coverage | **100.00 %** line + branch, every file | `scripts/coverage-gate.sh` |
 | Graceful drain under uvicorn | live call kept for the full budget, new connections `1013`, `/drainz` 200, hook exit 0 | [`DEPLOYMENT.md`](docs/DEPLOYMENT.md) |
 
@@ -215,7 +215,7 @@ uv run pytest                                         # network-free (pytest-soc
 ./scripts/coverage-gate.sh                            # 100.00 % line + branch
 ./scripts/audit-attribution.sh
 ./scripts/audit-hygiene.sh
-uv run python scripts/mutation-test.py                # >= 95 % required, 98.57 % achieved
+uv run python scripts/mutation-test.py                # >= 95 % required, 98.56 % achieved
 uv run python -m benchmarks.bench_concurrency         # 1,000-call load proof
 ```
 
