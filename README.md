@@ -186,8 +186,8 @@ app = build_app(GatewaySettings.from_env(os.environ), pipeline)  # any ASGI serv
 | `python -m voice_ai_realtime_gateway.deploy.drain [--pid 1] [--signal SIGUSR1] [--url http://127.0.0.1:8080/drainz] [--timeout 45] [--interval 0.5]` | Kubernetes preStop hook: start the drain, wait for `/drainz` |
 | `uv run python scripts/mutation-test.py [--target barge-in\|chunker\|ring] [--jobs N] [--min-score 95]` | AST mutation testing; report in `.cache/mutation/report.json` |
 | `./scripts/coverage-gate.sh` | 100.00 % line + branch gate, per file |
-| `./scripts/audit-attribution.sh` | every commit authored and committed by the sole maintainer identity |
-| `./scripts/audit-hygiene.sh` | no absolute machine paths, tracked artifacts or cache leaks |
+| `sh scripts/audit_identity.sh [--history-only --rev HEAD]` | every commit authored and committed by the sole maintainer identity, zero trailers |
+| `sh scripts/audit_hygiene.sh [--workspace]` | no absolute machine paths, tracked artifacts or cache leaks; `--workspace` also requires a pristine tree |
 
 ## Configuration
 
@@ -215,8 +215,8 @@ uv run mypy src tests benchmarks                      # --strict
 uv run bandit -c pyproject.toml -r src
 uv run pytest                                         # network-free (pytest-socket), warnings are errors
 ./scripts/coverage-gate.sh                            # 100.00 % line + branch
-./scripts/audit-attribution.sh
-./scripts/audit-hygiene.sh
+sh scripts/audit_identity.sh
+sh scripts/audit_hygiene.sh --workspace
 uv run python scripts/mutation-test.py                # >= 95 % required, 98.56 % achieved
 uv run python -m benchmarks.bench_concurrency         # 1,000-call load proof
 ```

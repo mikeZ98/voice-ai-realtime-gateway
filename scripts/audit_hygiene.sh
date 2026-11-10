@@ -7,7 +7,24 @@
 #   3. No tool cache outside ./.cache/ and no uncommitted build artifact on disk
 #      (proves the redirection actually works and the tree is pristine).
 #   4. Every tool's cache redirection is still configured in pyproject.toml.
+#   5. With --workspace: a pristine working tree (no modified, staged or untracked
+#      non-ignored file), proving tooling such as scripts/mutate.sh touched nothing
+#      outside ./.cache/.
+#
+# Usage: sh scripts/audit_hygiene.sh [--workspace]
+
+# Re-exec under real bash when launched via `sh` (POSIX mode lacks process substitution).
+if [ -z "${BASH_VERSION:-}" ] || shopt -qo posix 2>/dev/null; then exec bash "$0" "$@"; fi
 set -euo pipefail
+
+workspace=0
+for arg in "$@"; do
+  case "${arg}" in
+    --workspace) workspace=1 ;;
+    -h | --help) sed -n '2,17p' "$0"; exit 0 ;;
+    *) printf 'audit_hygiene.sh: unknown argument: %s\n' "${arg}" >&2; exit 2 ;;
+  esac
+done
 
 cd "$(git rev-parse --show-toplevel)"
 
@@ -40,7 +57,7 @@ done < <(
   find . \( -path ./.git -o -path ./.venv -o -path ./.cache \) -prune -o \
     \( -name .pytest_cache -o -name .ruff_cache -o -name .mypy_cache -o -name .hypothesis \
     -o -name __pycache__ -o -name htmlcov -o -name .benchmarks -o -name .coverage \
-    -o -name '.coverage.*' -o -name coverage.xml \) -print
+    -o -name '.coverage.*' -o -name coverage.xml -o -name mutants \) -print
 )
 
 # ---------------------------------------------------------------- 3b. build artifacts on disk
@@ -62,11 +79,19 @@ require_config 'cache_dir = ".cache/pytest"'
 require_config 'data_file = ".cache/coverage/.coverage"'
 grep -qxF '.cache/' .gitignore || fail ".gitignore must ignore .cache/"
 
+# ---------------------------------------------------------------- 5. pristine tree
+if ((workspace)); then
+  if dirty="$(git status --porcelain --untracked-files=all)" && [[ -n "${dirty}" ]]; then
+    fail "working tree is not pristine:"$'\n'"${dirty}"
+  fi
+fi
+
 if ((failures > 0)); then
-  printf 'audit-hygiene: FAILED (%d violation(s))\n' "${failures}" >&2
+  printf 'audit_hygiene: FAILED (%d violation(s))\n' "${failures}" >&2
   if find . \( -path ./.git -o -path ./.venv -o -path ./.cache \) -prune -o -name __pycache__ -print | grep -q .; then
     printf '  hint: export PYTHONPYCACHEPREFIX="$(git rev-parse --show-toplevel)/.cache/pycache"\n' >&2
   fi
   exit 1
 fi
-printf 'audit-hygiene: OK (no absolute paths, no tracked artifacts, all caches in ./.cache/)\n'
+printf 'audit_hygiene: OK (no absolute paths, no tracked artifacts, all caches in ./.cache/%s)\n' \
+  "$( ((workspace)) && printf ', pristine tree' )"
