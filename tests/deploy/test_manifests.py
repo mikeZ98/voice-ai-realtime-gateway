@@ -244,14 +244,26 @@ def test_dockerfile_is_multi_stage_pinned_and_cache_free() -> None:
     text = dockerfile()
     stages = re.findall(r"^FROM (\S+)(?: AS (\w+))?", text, re.MULTILINE)
     assert [name for _, name in stages] == ["uv", "build", "runtime"]
+    digest = r"@sha256:[0-9a-f]{64}"
     (base,) = re.findall(r"^ARG PYTHON_IMAGE=(\S+)$", text, re.MULTILINE)
-    assert re.fullmatch(r"python:3\.12\.\d+-slim-\w+", base), "exact patch-level base image"
-    assert re.fullmatch(r"ghcr\.io/astral-sh/uv:\d+\.\d+\.\d+", stages[0][0])
+    assert re.fullmatch(rf"python:3\.12\.\d+-slim-\w+{digest}", base), "patch-level, by digest"
+    (uv,) = re.findall(r"^ARG UV_IMAGE=(\S+)$", text, re.MULTILINE)
+    assert re.fullmatch(rf"ghcr\.io/astral-sh/uv:\d+\.\d+\.\d+{digest}", uv)
+    assert stages[0][0] == "${UV_IMAGE}"
+    assert re.match(rf"# syntax=docker/dockerfile:\d+\.\d+{digest}\n", text), "pinned frontend"
     assert "latest" not in text
     for setting in ("PIP_NO_CACHE_DIR=1", "UV_NO_CACHE=1", "PYTHONDONTWRITEBYTECODE=1"):
         assert setting in text
     assert "--require-hashes" in text
     assert "--invalidation-mode checked-hash" in text, "mtime-free, reproducible bytecode"
+    # Bit-for-bit reproducibility: build-time epoch, fixed hash seed, no wall-clock
+    # artifacts (uv_cache.json, useradd's /etc/shadow stamp), clamped timestamps.
+    assert "ARG SOURCE_DATE_EPOCH=0" in text
+    assert "PYTHONHASHSEED=0" in text
+    assert "uv_cache.json" in text
+    instructions = [line for line in text.splitlines() if not line.lstrip().startswith("#")]
+    assert not any("useradd" in line for line in instructions), "user written into passwd"
+    assert '-newermt "@${SOURCE_DATE_EPOCH}"' in text
     assert "COPY --from=build --chown=root:root /opt/gateway /opt/gateway" in runtime_stage()
     assert "COPY src" not in runtime_stage(), "no build context in the runtime image"
 

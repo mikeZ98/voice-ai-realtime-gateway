@@ -1,0 +1,74 @@
+# Local stack: the gateway server, plus an offline smoke run of the voice-gateway CLI.
+#
+#   SOURCE_DATE_EPOCH="$(git log -1 --format=%ct)" docker compose up --build --wait gateway
+#   docker compose run --rm simulator        # offline CLI in the same image, no network
+#   docker compose exec gateway python -m voice_ai_realtime_gateway.deploy.drain
+#   docker compose down
+#
+# Drain before `down`, exactly like the Kubernetes preStop hook: new calls are refused
+# with 1013, live calls finish (or get 1001 at the drain deadline), /drainz turns 200.
+# A bare `down` sends SIGTERM, on which uvicorn would cut open WebSockets with 1012.
+#
+# Both services run unprivileged (uid/gid 10001, no capabilities, no privilege
+# escalation) on a read-only root filesystem with an in-memory /tmp. Nothing is
+# bind-mounted from the host. The gateway is published on 127.0.0.1 only.
+#
+# The signing key below is a LOCAL DEMO key (base64url of
+# "local-compose-demo-key-not-secret"), not a secret; production keys come from a
+# Kubernetes Secret (deploy/k8s/).
+#
+# Compose cannot pass BuildKit's rewrite-timestamp exporter option, so the image it
+# builds is functionally identical but not byte-identical across builds; the
+# bit-for-bit artefact comes from scripts/verify_reproducible_image.sh.
+
+name: voice-ai-realtime-gateway
+
+x-hardened: &hardened
+  image: voice-ai-realtime-gateway/gateway:local
+  read_only: true
+  user: "10001:10001"
+  security_opt:
+    - "no-new-privileges:true"
+  cap_drop:
+    - ALL
+  tmpfs:
+    - /tmp:uid=10001,gid=10001,mode=0700,size=16m
+
+services:
+  gateway:
+    <<: *hardened
+    build:
+      context: .
+      dockerfile: deploy/Dockerfile
+      args:
+        SOURCE_DATE_EPOCH: ${SOURCE_DATE_EPOCH:-0}
+    environment:
+      GATEWAY_KEYS: local=bG9jYWwtY29tcG9zZS1kZW1vLWtleS1ub3Qtc2VjcmV0
+      GATEWAY_TENANTS: >-
+        {"local": {"max_concurrent_sessions": 50, "max_session_duration_s": 600,
+        "codecs": ["pcm16"]}}
+      GATEWAY_DRAIN_TIMEOUT_S: "10"
+      GATEWAY_FINAL_SCRAPE_GRACE_S: "0"
+    ports:
+      - "127.0.0.1:8080:8080"
+    stop_grace_period: 30s
+    healthcheck:
+      # No curl in the image; the stdlib is enough for GET /readyz.
+      test:
+        - CMD
+        - python
+        - -c
+        - >-
+          import sys, urllib.request;
+          sys.exit(urllib.request.urlopen("http://127.0.0.1:8080/readyz", timeout=2).status != 200)
+      interval: 2s
+      timeout: 3s
+      retries: 15
+      start_period: 3s
+
+  simulator:
+    <<: *hardened
+    profiles: [smoke]
+    network_mode: none
+    entrypoint: ["python", "-m", "voice_ai_realtime_gateway"]
+    command: ["--fast", "--no-hud", "--calls", "8", "--turns", "3"]

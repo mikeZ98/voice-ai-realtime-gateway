@@ -7,7 +7,8 @@
 #   3. No tool cache outside ./.cache/ and no uncommitted build artifact on disk
 #      (proves the redirection actually works and the tree is pristine).
 #   4. Every tool's cache redirection is still configured in pyproject.toml.
-#   5. With --workspace: a pristine working tree (no modified, staged or untracked
+#   5. Every image pulled by deploy/Dockerfile and compose.yaml is pinned by digest.
+#   6. With --workspace: a pristine working tree (no modified, staged or untracked
 #      non-ignored file), proving tooling such as scripts/mutate.sh touched nothing
 #      outside ./.cache/.
 #
@@ -79,7 +80,25 @@ require_config 'cache_dir = ".cache/pytest"'
 require_config 'data_file = ".cache/coverage/.coverage"'
 grep -qxF '.cache/' .gitignore || fail ".gitignore must ignore .cache/"
 
-# ---------------------------------------------------------------- 5. pristine tree
+# ---------------------------------------------------------------- 5. images pinned by digest
+# Dockerfile: the syntax frontend, image ARGs and literal FROMs (FROM ${ARG} is covered
+# by its ARG). compose.yaml: every pulled image; the locally built
+# voice-ai-realtime-gateway/* image has no registry digest.
+readonly DIGEST_RE='@sha256:[0-9a-f]{64}'
+if [[ -f deploy/Dockerfile ]]; then
+  if unpinned="$(grep -nE '^# syntax=|^ARG [A-Z_]+_IMAGE=|^FROM ' deploy/Dockerfile \
+      | grep -vE '^[0-9]+:FROM \$\{[A-Z_]+\}' | grep -vE "${DIGEST_RE}")"; then
+    fail "deploy/Dockerfile image references without a digest:"$'\n'"${unpinned}"
+  fi
+fi
+if [[ -f compose.yaml ]]; then
+  if unpinned="$(grep -nE '^[[:space:]]+image:' compose.yaml \
+      | grep -v 'image: voice-ai-realtime-gateway/' | grep -vE "${DIGEST_RE}")"; then
+    fail "compose.yaml images without a digest:"$'\n'"${unpinned}"
+  fi
+fi
+
+# ---------------------------------------------------------------- 6. pristine tree
 if ((workspace)); then
   if dirty="$(git status --porcelain --untracked-files=all)" && [[ -n "${dirty}" ]]; then
     fail "working tree is not pristine:"$'\n'"${dirty}"
