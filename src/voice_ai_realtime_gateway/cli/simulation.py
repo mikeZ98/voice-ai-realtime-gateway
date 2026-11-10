@@ -64,12 +64,20 @@ if TYPE_CHECKING:
     from voice_ai_realtime_gateway.telemetry.events import TelemetryEvent
 
 __all__ = [
+    "PLAYOUT_CAPACITY_FRAMES",
+    "PLAYOUT_PREBUFFER_FRAMES",
     "LiveSnapshot",
+    "PlayoutBuffer",
     "Simulation",
     "SimulationConfig",
     "TelemetryCollector",
     "percentiles",
 ]
+
+PLAYOUT_PREBUFFER_FRAMES: Final = 2
+"""Client playout starts once 40 ms (two 20 ms frames) are buffered."""
+PLAYOUT_CAPACITY_FRAMES: Final = 10
+"""Client jitter buffer holds at most 200 ms (ten 20 ms frames)."""
 
 RING_CAPACITY_BYTES_PER_CALL: Final = DEFAULT_INGRESS_RING_BYTES + DEFAULT_EGRESS_RING_BYTES
 """Ingress plus egress ring capacity of one call (the utterance ring is transient)."""
@@ -231,6 +239,63 @@ class LiveSnapshot:
         return self.buffered_bytes / self.capacity_bytes if self.capacity_bytes else 0.0
 
 
+@final
+class PlayoutBuffer:
+    """Model of a client jitter buffer playing one agent answer at the frame cadence.
+
+    Playout of an answer starts ``prebuffer_frames`` frame periods after its first frame
+    arrives; frame ``k`` is due ``k`` periods later. A frame that arrives after its due
+    time is an **underflow** (the speaker ran dry: an audible gap); playout then resumes
+    from that frame, shifting later deadlines. A frame that arrives while the buffer
+    already holds ``capacity_frames`` unplayed frames is an **overflow** (it would be
+    dropped). :meth:`reset` starts a new answer (also after a ``playback.flush``).
+    """
+
+    __slots__ = ("_capacity", "_frame_ns", "_index", "_prebuffer_ns", "_start_ns")
+
+    def __init__(
+        self,
+        frame_ns: int,
+        *,
+        prebuffer_frames: int = PLAYOUT_PREBUFFER_FRAMES,
+        capacity_frames: int = PLAYOUT_CAPACITY_FRAMES,
+    ) -> None:
+        """Model a buffer for ``frame_ns``-long frames.
+
+        Raises:
+            ValueError: on a non-positive frame length or capacity, or a negative
+                pre-buffer.
+        """
+        if frame_ns < 1 or capacity_frames < 1 or prebuffer_frames < 0:
+            msg = "frame_ns and capacity_frames must be positive, prebuffer_frames >= 0"
+            raise ValueError(msg)
+        self._frame_ns = frame_ns
+        self._prebuffer_ns = prebuffer_frames * frame_ns
+        self._capacity = capacity_frames
+        self._start_ns: int | None = None
+        self._index = 0
+
+    def reset(self) -> None:
+        """Forget the current answer; the next frame starts a new one."""
+        self._start_ns = None
+
+    def arrive(self, at_ns: int) -> tuple[bool, bool]:
+        """Account for one frame arriving at ``at_ns``; returns ``(underflow, overflow)``."""
+        if self._start_ns is None:
+            self._start_ns, self._index = at_ns, 0
+        else:
+            self._index += 1
+        playout_ns = self._start_ns + self._prebuffer_ns
+        due_ns = playout_ns + self._index * self._frame_ns
+        underflow = at_ns > due_ns
+        if underflow:
+            self._start_ns += at_ns - due_ns  # playout stalls until this frame is here
+            playout_ns += at_ns - due_ns
+        played = (at_ns - playout_ns) // self._frame_ns + 1 if at_ns >= playout_ns else 0
+        overflow = self._index + 1 - played > self._capacity
+        return underflow, overflow
+
+
 @dataclass(slots=True)
 class _ClientStats:
     started: int = 0
@@ -244,6 +309,9 @@ class _ClientStats:
     frames_out: int = 0
     jitter_ns: list[int] = field(default_factory=list)
     flush_ns: list[int] = field(default_factory=list)
+    playout_frames: int = 0
+    underflows: int = 0
+    overflows: int = 0
     close_codes: Counter[int] = field(default_factory=Counter)
 
 
@@ -407,6 +475,7 @@ class Simulation:
             },
             "client_flush_ms": percentiles(clients.flush_ns),
             "jitter_ms": percentiles(clients.jitter_ns),
+            "playout": self._playout_summary(),
             "egress": {
                 "frames_out": clients.frames_out,
                 "dropped": collector.egress_dropped,
@@ -416,6 +485,22 @@ class Simulation:
             "drain": None
             if drain is None
             else {"waited_s": round(drain.waited_s, 3), "forced": drain.forced},
+        }
+
+    def _playout_summary(self) -> dict[str, float | int] | None:
+        """Client jitter-buffer outcome; ``None`` when audio is not paced in real time."""
+        if not self._config.real_time:
+            return None
+        clients, frame_ms = self._clients, self._config.frame_ms
+        frames = clients.playout_frames
+        return {
+            "prebuffer_ms": PLAYOUT_PREBUFFER_FRAMES * frame_ms,
+            "capacity_ms": PLAYOUT_CAPACITY_FRAMES * frame_ms,
+            "frames": frames,
+            "underflows": clients.underflows,
+            "underflow_rate": round(clients.underflows / frames, 6) if frames else 0.0,
+            "overflows": clients.overflows,
+            "overflow_rate": round(clients.overflows / frames, 6) if frames else 0.0,
         }
 
     @property
@@ -508,6 +593,7 @@ class _Client:
         self._previous_ns = 0
         self._interrupt_ns = 0
         self._listener: asyncio.Task[None] | None = None
+        self._playout = PlayoutBuffer(config.frame_ms * _NS_PER_MS)
 
     async def converse(self) -> None:
         self._listener = asyncio.create_task(self._listen(), name="client-listen")
@@ -593,14 +679,25 @@ class _Client:
                     self._on_control(message)
                     continue
                 now = time.monotonic_ns()
-                if self._received and self._previous_ns and self._config.real_time:
-                    expected = self._config.frame_ms * _NS_PER_MS
-                    self._stats.jitter_ns.append(abs(now - self._previous_ns - expected))
+                if self._config.real_time:
+                    self._account_playout(now)
                 self._previous_ns = now
                 self._received += 1
                 self._stats.frames_out += 1
         except TransportClosedError:
             self._closed.set()
+
+    def _account_playout(self, now: int) -> None:
+        stats = self._stats
+        if self._received and self._previous_ns:
+            expected = self._config.frame_ms * _NS_PER_MS
+            stats.jitter_ns.append(abs(now - self._previous_ns - expected))
+        if not self._received:
+            self._playout.reset()  # the first frame of a new answer
+        underflow, overflow = self._playout.arrive(now)
+        stats.playout_frames += 1
+        stats.underflows += underflow
+        stats.overflows += overflow
 
     def _on_control(self, text: str) -> None:
         if isinstance(decode_server_message(text), PlaybackFlush):

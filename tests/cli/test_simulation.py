@@ -12,8 +12,11 @@ import pytest
 from duplex_support import until
 from voice_ai_realtime_gateway.cli import simulation as sim
 from voice_ai_realtime_gateway.cli.simulation import (
+    PLAYOUT_CAPACITY_FRAMES,
+    PLAYOUT_PREBUFFER_FRAMES,
     RING_CAPACITY_BYTES_PER_CALL,
     LiveSnapshot,
+    PlayoutBuffer,
     Simulation,
     SimulationConfig,
     TelemetryCollector,
@@ -183,6 +186,7 @@ async def test_fast_run_is_healthy_and_exercises_barge_in() -> None:
     assert isinstance(egress, dict)
     assert (egress["dropped"], egress["drop_rate"]) == (0, 0.0)
     assert summary["drain"] is None
+    assert summary["playout"] is None, "no playout model without real-time pacing"
     assert summary["signals"] == []
     assert simulation.drain_phase is DrainPhase.SERVING
     assert simulation.collector.ttft_ns
@@ -262,6 +266,11 @@ async def test_real_time_run_measures_jitter() -> None:
     assert isinstance(jitter, dict)
     assert jitter["count"] == SimulationConfig(reply="Hi there.").reply_frames - 1
     assert simulation.snapshot().jitter_p99_ms is not None
+    playout = simulation.summary()["playout"]
+    assert isinstance(playout, dict)
+    assert playout["frames"] == SimulationConfig(reply="Hi there.").reply_frames
+    assert (playout["prebuffer_ms"], playout["capacity_ms"]) == (40, 200)
+    assert playout["overflows"] == 0
 
 
 async def test_client_ignores_other_control_and_times_unprompted_flushes(
@@ -293,3 +302,60 @@ async def test_a_call_without_a_close_code_is_neither_counted_nor_completed(
     summary = simulation.summary()
     assert summary["close_codes"] == {}
     assert summary["calls"] == {"started": 1, "completed": 0, "refused": 0, "failed": 0}
+
+
+# ----------------------------------------------------------------- playout model
+
+F = 20_000_000  # one 20 ms frame
+
+
+def test_playout_buffer_is_validated() -> None:
+    for bad in (
+        {"frame_ns": 0},
+        {"frame_ns": F, "capacity_frames": 0},
+        {"frame_ns": F, "prebuffer_frames": -1},
+    ):
+        with pytest.raises(ValueError, match="positive"):
+            PlayoutBuffer(**bad)
+    assert (PLAYOUT_PREBUFFER_FRAMES, PLAYOUT_CAPACITY_FRAMES) == (2, 10)
+
+
+def test_on_cadence_audio_never_underflows_or_overflows() -> None:
+    buffer = PlayoutBuffer(F)
+    assert [buffer.arrive(k * F) for k in range(50)] == [(False, False)] * 50
+
+
+def test_a_frame_exactly_at_its_deadline_is_on_time_one_ns_later_underflows() -> None:
+    buffer = PlayoutBuffer(F, prebuffer_frames=0)
+    assert buffer.arrive(0) == (False, False)
+    assert buffer.arrive(F) == (False, False), "due at exactly F"
+    assert buffer.arrive(2 * F + 1) == (True, False), "1 ns past its deadline"
+
+
+def test_playout_resumes_after_an_underflow() -> None:
+    buffer = PlayoutBuffer(F)  # 40 ms pre-buffer
+    assert buffer.arrive(0) == (False, False)
+    assert buffer.arrive(F + 100 * F) == (True, False), "2 s late: the speaker ran dry"
+    # Later frames keep the cadence relative to the late one: no cascade of underflows.
+    assert [buffer.arrive(101 * F + k * F) for k in range(1, 6)] == [(False, False)] * 5
+
+
+def test_a_burst_beyond_capacity_overflows() -> None:
+    buffer = PlayoutBuffer(F, prebuffer_frames=2, capacity_frames=10)
+    results = [buffer.arrive(0) for _ in range(12)]  # 12 frames before playout starts
+    assert [overflow for _, overflow in results] == [False] * 10 + [True] * 2
+    assert not any(underflow for underflow, _ in results)
+
+
+def test_frames_played_at_playout_start_free_capacity() -> None:
+    buffer = PlayoutBuffer(F, prebuffer_frames=1, capacity_frames=1)
+    assert buffer.arrive(0) == (False, False)
+    assert buffer.arrive(F) == (False, False), "frame 0 starts playing at exactly F"
+    assert buffer.arrive(F) == (False, True), "two unplayed frames exceed a capacity of 1"
+
+
+def test_reset_starts_a_new_answer() -> None:
+    buffer = PlayoutBuffer(F)
+    buffer.arrive(0)
+    buffer.reset()
+    assert buffer.arrive(500 * F) == (False, False), "not late: it is a new answer's first frame"
