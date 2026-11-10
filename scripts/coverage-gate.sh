@@ -7,6 +7,9 @@
 # src/ so coverage cannot be gamed; the only exclusion is `if TYPE_CHECKING:`.
 #
 # Extra arguments are forwarded to pytest.
+
+# Re-exec under real bash when launched via `sh` (dash on Ubuntu lacks pipefail).
+if [ -z "${BASH_VERSION:-}" ] || shopt -qo posix 2>/dev/null; then exec bash "$0" "$@"; fi
 set -euo pipefail
 
 root="$(git rev-parse --show-toplevel)"
