@@ -57,7 +57,17 @@ TARGETS: Final[dict[str, tuple[str, tuple[str, ...]]]] = {
         ("tests/domain", "tests/vad/test_vad_bridge.py", "tests/pipeline"),
     ),
     "chunker": (f"{PACKAGE}/inference/chunker.py", ("tests/inference/test_chunker.py",)),
+    "frames": (f"{PACKAGE}/core/frames.py", ("tests/core/test_frames.py",)),
+    "framing": (f"{PACKAGE}/transport/framing.py", ("tests/transport/test_framing.py",)),
     "ring": (f"{PACKAGE}/core/ring.py", ("tests/core",)),
+    "supervisor": (
+        f"{PACKAGE}/core/supervisor.py",
+        ("tests/core/test_supervisor.py", "tests/core/test_cancel_properties.py"),
+    ),
+    "validation": (
+        f"{PACKAGE}/_validation.py",
+        ("tests/test_numeric_contracts.py", "tests/deploy/test_lifecycle.py"),
+    ),
 }
 
 _COMPARE_SWAPS: Final[dict[type[ast.cmpop], type[ast.cmpop]]] = {

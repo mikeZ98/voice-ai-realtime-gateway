@@ -142,17 +142,32 @@ server's handshake timeout. Configure it there.
   passes;
 - **timeouts:** a hanging mutant counts as killed.
 
-Targets are the barge-in critical path (`domain/duplex.py`), the sentence chunker and
-the audio ring (buffer overflow logic).
+Targets are the audio framing and dispatch core: the barge-in critical path
+(`domain/duplex.py`), the sentence chunker, the PCM frame contract (`core/frames.py`),
+the wire packet codec (`transport/framing.py`), the audio ring (buffer overflow logic),
+the task supervisor (non-blocking cancellation) and the finiteness predicates every
+contract validates through (`_validation.py`).
 
 **Results** (40 Hypothesis examples per property, derandomized):
 
 | Target | Mutants | Killed | Score |
 |---|---|---|---|
-| barge-in critical path (`domain/duplex.py`) | 44 | 44 | **100.00 %** |
+| barge-in critical path (`domain/duplex.py`) | 43 | 43 | **100.00 %** |
 | sentence chunker (`inference/chunker.py`) | 93 | 90 | **96.77 %** |
+| PCM frame contract (`core/frames.py`) | 32 | 32 | **100.00 %** |
+| wire packet codec (`transport/framing.py`) | 30 | 30 | **100.00 %** |
 | audio ring / overflow (`core/ring.py`) | 72 | 72 | **100.00 %** |
-| **overall** | **209** | **206** | **98.56 %** |
+| task supervisor (`core/supervisor.py`) | 6 | 6 | **100.00 %** |
+| finiteness predicates (`_validation.py`) | 9 | 9 | **100.00 %** |
+| **overall** | **285** | **282** | **98.95 %** |
+
+The frame and codec targets were added after v0.5.0. Their first run left 9 survivors, all
+test gaps, all now killed:
+- the smallest valid sample rate and duration (1);
+- a 2-D byte buffer, which `AudioFrame.wrap` must flatten;
+- the 32 KiB default payload limit, the wire codec IDs (PCM16 = 1, Opus = 2) and the
+  full u64 range of the sender timestamp, now pinned;
+- a payload exactly at the decoder's limit, which must be accepted.
 
 v0.4.0 measured 207 / 210 (98.57 %). In v0.5.0 the abbreviation lookback became
 bounded by the unit start (a split-invariance bug found by the fuzzer), which replaced
@@ -181,5 +196,6 @@ The first run scored 86.19 %. The survivors were triaged one by one:
   - the scanner's initial index, set in the constructor and again on flush. Position 0
     can never be a boundary, because a boundary needs speech before it.
 
-Run it with `uv run python scripts/mutation-test.py [--target NAME] [--jobs N] [--min-score 95]`.
-The report is written to `.cache/mutation/report.json`.
+Run it with `sh scripts/mutate.sh [--target NAME ...] [--jobs N] [--min-score 95]`. The
+script wraps the harness, fails below the minimum score, and verifies that tracked sources
+are unchanged afterwards. The report is written to `.cache/mutation/report.json`.

@@ -112,3 +112,15 @@ def test_pcm16_frames_exist_exactly_on_interleaved_sample_boundaries(
     else:
         with pytest.raises(ValueError, match="whole interleaved sample frames"):
             wrap(bytes(nbytes), channels=channels)
+
+
+def test_smallest_positive_rate_and_duration_are_valid() -> None:
+    frame = wrap(bytes(2), sample_rate_hz=1, duration_ns=1)
+    assert (frame.sample_rate_hz, frame.duration_ns) == (1, 1)
+
+
+def test_wrap_flattens_a_multidimensional_byte_buffer() -> None:
+    grid = memoryview(bytes(range(8))).cast("B", shape=[2, 4])
+    frame = wrap(grid)
+    assert (frame.payload.ndim, frame.payload.format, frame.nbytes) == (1, "B", 8)
+    assert bytes(frame.payload) == bytes(range(8))

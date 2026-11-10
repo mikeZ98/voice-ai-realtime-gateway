@@ -265,3 +265,28 @@ def test_stream_decoder_rejects_desync_and_oversize_before_buffering_the_body() 
         decoder.feed(oversized, received_at_ns=0)
     assert excinfo.value.code is CloseCode.MESSAGE_TOO_BIG
     assert PACKET_MAGIC == b"VG"
+
+
+# ------------------------------------------------------------------------ pinned bounds
+
+
+def test_wire_constants_are_pinned() -> None:
+    assert DEFAULT_MAX_PAYLOAD_BYTES == 32 * 1024, "80 ms of 48 kHz stereo PCM16 fits"
+    assert encode_packet(frame())[3] == 1, "PCM16 codec id"
+    assert encode_packet(frame(bytes(10), codec=AudioCodec.OPUS, rate=48_000))[3] == 2
+
+
+def test_sender_timestamp_spans_the_full_u64() -> None:
+    top = 2**64 - 1
+    decoded = decode_packet(encode_packet(frame(origin_ns=top)), received_at_ns=0)
+    assert decoded.sender_timestamp_ns == top
+    with pytest.raises(ValueError, match="origin_ns"):
+        encode_packet(frame(origin_ns=top + 1))
+
+
+@pytest.mark.parametrize("limit", [64, DEFAULT_MAX_PAYLOAD_BYTES])
+def test_stream_decoder_accepts_a_payload_exactly_at_its_limit(limit: int) -> None:
+    packet = encode_packet(frame(bytes(limit)))
+    (decoded,) = PacketStreamDecoder(max_payload=limit).feed(packet, received_at_ns=0)
+    assert decoded.frame.nbytes == limit
+    assert decode_packet(packet, received_at_ns=0, max_payload=limit).frame.nbytes == limit
