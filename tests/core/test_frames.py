@@ -4,6 +4,8 @@ import array
 from typing import Any
 
 import pytest
+from hypothesis import given
+from hypothesis import strategies as st
 
 from voice_ai_realtime_gateway.core.frames import AudioCodec, AudioFrame
 from voice_ai_realtime_gateway.telemetry.ids import TraceContext
@@ -97,3 +99,16 @@ def test_frames_compare_by_identity_not_payload() -> None:
     first, second = wrap(bytes(4), trace=trace), wrap(bytes(4), trace=trace)
     assert first == first  # noqa: PLR0124 -- identity semantics is the contract
     assert first != second
+
+
+@given(nbytes=st.integers(min_value=1, max_value=512), channels=st.sampled_from([1, 2]))
+def test_pcm16_frames_exist_exactly_on_interleaved_sample_boundaries(
+    nbytes: int, channels: int
+) -> None:
+    aligned = nbytes % (2 * channels) == 0
+    if aligned:
+        frame = wrap(bytes(nbytes), channels=channels)
+        assert frame.nbytes == nbytes
+    else:
+        with pytest.raises(ValueError, match="whole interleaved sample frames"):
+            wrap(bytes(nbytes), channels=channels)
