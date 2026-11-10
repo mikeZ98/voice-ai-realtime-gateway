@@ -11,6 +11,7 @@ import voice_ai_realtime_gateway
 
 PUBLIC_PACKAGES = (
     "voice_ai_realtime_gateway.adapters",
+    "voice_ai_realtime_gateway.cli",
     "voice_ai_realtime_gateway.core",
     "voice_ai_realtime_gateway.deploy",
     "voice_ai_realtime_gateway.domain",

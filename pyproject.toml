@@ -15,6 +15,14 @@ classifiers = [
 ]
 dependencies = []
 
+[project.scripts]
+voice-gateway = "voice_ai_realtime_gateway.cli:main"
+
+[project.optional-dependencies]
+hud = [
+    "rich>=13.9",
+]
+
 [dependency-groups]
 dev = [
     "bandit[toml]>=1.8",
@@ -25,6 +33,7 @@ dev = [
     "pytest-cov>=6.1",
     "pytest-socket>=0.7",
     "pyyaml>=6.0",
+    "rich>=13.9",
     "ruff>=0.11",
     "types-pyyaml>=6.0",
 ]
