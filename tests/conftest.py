@@ -35,6 +35,18 @@ settings.register_profile(
     deadline=None,
     suppress_health_check=[HealthCheck.too_slow],
 )
+# CI: deterministic and bounded. Derandomised (every run explores the same examples),
+# no example database to restore, the default 100 examples per property, and the
+# falsifying blob printed so a CI failure reproduces locally.
+settings.register_profile(
+    "ci",
+    database=None,
+    derandomize=True,
+    max_examples=100,
+    deadline=None,
+    print_blob=True,
+    suppress_health_check=[HealthCheck.too_slow],
+)
 settings.register_profile(
     "mutation",
     database=None,
