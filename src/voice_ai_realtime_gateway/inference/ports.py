@@ -12,6 +12,7 @@ import time
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Protocol, final, override
 
+from voice_ai_realtime_gateway._validation import is_unit_interval
 from voice_ai_realtime_gateway.core.frames import AudioCodec, AudioFrame
 
 if TYPE_CHECKING:
@@ -59,6 +60,16 @@ class TranscriptChunk:
     words: tuple[WordTiming, ...]
     trace: TraceContext
     at_ns: int
+
+    def __post_init__(self) -> None:
+        """Validate.
+
+        Raises:
+            ValueError: if ``confidence`` is not a finite probability in ``[0, 1]``.
+        """
+        if not is_unit_interval(self.confidence):
+            msg = f"confidence must be a finite number in [0, 1], got {self.confidence}"
+            raise ValueError(msg)
 
 
 class StreamingASR(Protocol):

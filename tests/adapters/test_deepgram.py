@@ -131,6 +131,8 @@ def mutate(path: tuple[str | int, ...], value: object) -> str:
         mutate(("channel", "alternatives", 0, "words", 0, "start"), 0.5),
         mutate(("channel", "alternatives", 0, "words", 0, "end"), "late"),
         mutate(("channel", "alternatives", 0, "confidence"), value=True),
+        mutate(("channel", "alternatives", 0, "confidence"), value=1.5),
+        mutate(("channel", "alternatives", 0, "confidence"), value=-0.25),
         mutate(("start",), -1),
         mutate(("duration",), KeyError),
         (

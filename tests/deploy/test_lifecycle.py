@@ -171,7 +171,18 @@ async def test_signal_handlers_trigger_the_drain() -> None:
 
 
 @pytest.mark.parametrize(
-    "kwargs", [{"drain_timeout_s": -1}, {"final_scrape_grace_s": -1}, {"poll_interval_s": 0}]
+    "kwargs",
+    [
+        {"drain_timeout_s": -1},
+        {"final_scrape_grace_s": -1},
+        {"poll_interval_s": 0},
+        {"drain_timeout_s": float("nan")},
+        {"drain_timeout_s": float("inf")},
+        {"final_scrape_grace_s": float("nan")},
+        {"final_scrape_grace_s": float("inf")},
+        {"poll_interval_s": float("nan")},
+        {"poll_interval_s": float("inf")},
+    ],
 )
 async def test_configuration_is_validated(kwargs: dict[str, float]) -> None:
     sessions = SessionRegistry()

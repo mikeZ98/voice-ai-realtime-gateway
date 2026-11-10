@@ -42,6 +42,7 @@ import time
 from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, final, override
 
+from voice_ai_realtime_gateway._validation import is_positive_finite
 from voice_ai_realtime_gateway.domain.states import DrainReason
 from voice_ai_realtime_gateway.inference.capture import DEFAULT_PREROLL_MS, SpeechCapture
 from voice_ai_realtime_gateway.inference.chunker import ChunkerConfig, SentenceChunker
@@ -105,10 +106,14 @@ class AgentConfig:
         """Validate.
 
         Raises:
-            ValueError: if ``max_pending_units`` is not positive.
+            ValueError: if ``max_pending_units`` is not positive, or ``drain_timeout_s``
+                is not positive and finite.
         """
         if self.max_pending_units < 1:
             msg = f"max_pending_units must be positive, got {self.max_pending_units}"
+            raise ValueError(msg)
+        if not is_positive_finite(self.drain_timeout_s):
+            msg = f"drain_timeout_s must be positive and finite, got {self.drain_timeout_s}"
             raise ValueError(msg)
 
 

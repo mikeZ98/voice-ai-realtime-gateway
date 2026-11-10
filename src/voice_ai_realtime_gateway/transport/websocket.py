@@ -150,7 +150,7 @@ class TransportLimits:
         """Validate.
 
         Raises:
-            ValueError: if any limit is not positive.
+            ValueError: if any limit is below 1 or not finite.
         """
         for name in (
             "max_payload_bytes",
@@ -159,8 +159,9 @@ class TransportLimits:
             "control_rate_per_s",
             "control_burst",
         ):
-            if getattr(self, name) < 1:
-                msg = f"{name} must be positive"
+            value = getattr(self, name)
+            if not (math.isfinite(value) and value >= 1):
+                msg = f"{name} must be positive and finite"
                 raise ValueError(msg)
 
 

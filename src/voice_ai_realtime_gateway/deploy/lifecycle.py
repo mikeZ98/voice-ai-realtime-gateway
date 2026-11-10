@@ -30,6 +30,7 @@ from dataclasses import dataclass
 from enum import StrEnum, unique
 from typing import TYPE_CHECKING, Final, Protocol, final
 
+from voice_ai_realtime_gateway._validation import is_non_negative_finite, is_positive_finite
 from voice_ai_realtime_gateway.transport.errors import CloseCode
 
 if TYPE_CHECKING:
@@ -121,10 +122,15 @@ class DrainController:
         """Drain ``server`` within ``drain_timeout_s``.
 
         Raises:
-            ValueError: on a negative duration or a non-positive poll interval.
+            ValueError: on a negative or non-finite duration, or a poll interval that
+                is not positive and finite.
         """
-        if drain_timeout_s < 0 or final_scrape_grace_s < 0 or poll_interval_s <= 0:
-            msg = "durations must be non-negative and poll_interval_s positive"
+        if not (
+            is_non_negative_finite(drain_timeout_s)
+            and is_non_negative_finite(final_scrape_grace_s)
+            and is_positive_finite(poll_interval_s)
+        ):
+            msg = "durations must be finite and non-negative, poll_interval_s positive"
             raise ValueError(msg)
         self._server = server
         self._sessions = sessions

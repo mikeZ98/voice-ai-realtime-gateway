@@ -33,6 +33,10 @@ voice_ai_realtime_gateway
 Imports only point downwards; telemetry serialises domain enums as their `str` values so
 it never imports upwards. The package has **zero runtime dependencies**.
 
+Below every layer sits `_validation.py` (finiteness-aware predicates such as
+`is_positive_finite`), which imports nothing from the package. Contracts validate floats
+through it because a plain comparison admits NaN (`nan <= 0` is `False`) and `inf`.
+
 ### Concurrency model
 
 Each session is confined to one asyncio event loop. Every state-mutating operation

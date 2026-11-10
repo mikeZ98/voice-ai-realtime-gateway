@@ -157,10 +157,13 @@ def parse_deepgram_message(text: str) -> DeepgramResult | DeepgramMetadata | Non
     start, duration = _number(message, "start"), _number(message, "duration")
     if start < 0 or duration < 0:
         _malformed("start and duration must be non-negative")
+    confidence = _number(best, "confidence")
+    if not 0.0 <= confidence <= 1.0:
+        _malformed("confidence must be in [0, 1]")
     return DeepgramResult(
         transcript=transcript,
         is_final=is_final,
-        confidence=_number(best, "confidence"),
+        confidence=confidence,
         words=tuple(_word(word) for word in words),
         start_s=start,
         duration_s=duration,

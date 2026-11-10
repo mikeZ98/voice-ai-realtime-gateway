@@ -11,6 +11,8 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import TYPE_CHECKING
 
+from voice_ai_realtime_gateway._validation import is_unit_interval
+
 if TYPE_CHECKING:
     from voice_ai_realtime_gateway.telemetry.ids import TraceContext
 
@@ -165,6 +167,16 @@ class TranscriptReceived:
     is_final: bool
     text_chars: int
     confidence: float
+
+    def __post_init__(self) -> None:
+        """Validate.
+
+        Raises:
+            ValueError: if ``confidence`` is not a finite probability in ``[0, 1]``.
+        """
+        if not is_unit_interval(self.confidence):
+            msg = f"confidence must be a finite number in [0, 1], got {self.confidence}"
+            raise ValueError(msg)
 
 
 @dataclass(frozen=True, slots=True, kw_only=True)

@@ -33,6 +33,7 @@ from collections import Counter as Tally
 from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Final, NoReturn, final
 
+from voice_ai_realtime_gateway._validation import is_positive_finite
 from voice_ai_realtime_gateway.core.frames import AudioCodec
 from voice_ai_realtime_gateway.production.admission import AdmissionError, bearer_token
 from voice_ai_realtime_gateway.telemetry.ids import (
@@ -107,10 +108,10 @@ class TenantPolicy:
         """Validate.
 
         Raises:
-            ValueError: on a non-positive bound or an empty codec set.
+            ValueError: on a non-positive or non-finite bound or an empty codec set.
         """
-        if self.max_concurrent_sessions < 1 or self.max_session_duration_s <= 0:
-            msg = "tenant bounds must be positive"
+        if self.max_concurrent_sessions < 1 or not is_positive_finite(self.max_session_duration_s):
+            msg = "tenant bounds must be positive and finite"
             raise ValueError(msg)
         if not self.allowed_codecs:
             msg = "a tenant must allow at least one codec"
@@ -129,10 +130,10 @@ class ServerConfig:
         """Validate.
 
         Raises:
-            ValueError: if ``media_timeout_s`` is not positive.
+            ValueError: if ``media_timeout_s`` is not positive and finite.
         """
-        if self.media_timeout_s <= 0:
-            msg = "media_timeout_s must be positive"
+        if not is_positive_finite(self.media_timeout_s):
+            msg = "media_timeout_s must be positive and finite"
             raise ValueError(msg)
 
 

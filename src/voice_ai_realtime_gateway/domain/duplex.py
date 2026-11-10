@@ -22,6 +22,7 @@ import time
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any, Final, Protocol, final, override
 
+from voice_ai_realtime_gateway._validation import is_positive_finite
 from voice_ai_realtime_gateway.core.ring import AudioRingBuffer, OverflowPolicy
 from voice_ai_realtime_gateway.core.supervisor import JoinReport, TaskSupervisor
 from voice_ai_realtime_gateway.domain.errors import SessionStateError, StaleSpanError
@@ -125,10 +126,11 @@ class DuplexSession:
         """Create an ``IDLE`` session.
 
         Raises:
-            ValueError: on a non-positive ``drain_timeout_s`` or ``barge_in_budget_ns``.
+            ValueError: on a non-positive or non-finite ``drain_timeout_s``, or a
+                non-positive ``barge_in_budget_ns``.
         """
-        if drain_timeout_s <= 0:
-            msg = f"drain_timeout_s must be positive, got {drain_timeout_s}"
+        if not is_positive_finite(drain_timeout_s):
+            msg = f"drain_timeout_s must be positive and finite, got {drain_timeout_s}"
             raise ValueError(msg)
         if barge_in_budget_ns <= 0:
             msg = f"barge_in_budget_ns must be positive, got {barge_in_budget_ns}"
