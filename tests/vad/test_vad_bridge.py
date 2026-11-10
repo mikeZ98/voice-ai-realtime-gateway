@@ -1,8 +1,10 @@
-"""VAD bridge: edges drive the session; onset while SPEAKING is a sub-100 us barge-in."""
+"""VAD bridge: edges drive the session; onset while SPEAKING is a sub-100 us barge-in
+(untraced; see ``TRACED_SLOWDOWN`` for runs under coverage)."""
 
 from __future__ import annotations
 
 import statistics
+import sys
 import time
 from typing import TYPE_CHECKING
 
@@ -24,6 +26,22 @@ if TYPE_CHECKING:
 pytestmark = pytest.mark.usefixtures("strict_loop")
 
 S = SessionState
+
+MEDIAN_BARGE_IN_NS = 100_000
+"""Untraced median bound for VAD onset -> ``DRAINING`` (measured locally: ~20 us)."""
+
+TRACED_SLOWDOWN = 5
+"""Headroom under a line tracer (coverage). It inflates this pure-Python path ~2.3x on
+a laptop and more on a shared 2-vCPU CI runner (142 us measured there), so a traced run
+asserts 5x the untraced bound; the hard 15 ms budget is asserted per sample either way."""
+
+
+def line_tracer_active() -> bool:
+    """True under coverage (or any tracer), via sys.settrace or sys.monitoring."""
+    return (
+        sys.gettrace() is not None
+        or sys.monitoring.get_tool(sys.monitoring.COVERAGE_ID) is not None
+    )
 
 
 class ScriptedVAD:
@@ -106,5 +124,7 @@ async def test_vad_triggered_barge_in_is_sub_100_microseconds(
         assert outcome.barge_in is not None
         latencies.append(outcome.barge_in.detect_to_draining_ns)
         await session.aclose()
-    assert statistics.median(latencies) < 100_000, f"median {statistics.median(latencies)} ns"
+    bound = MEDIAN_BARGE_IN_NS * (TRACED_SLOWDOWN if line_tracer_active() else 1)
+    median = statistics.median(latencies)
+    assert median < bound, f"median {median} ns >= {bound} ns"
     assert max(latencies) < BARGE_IN_BUDGET_NS

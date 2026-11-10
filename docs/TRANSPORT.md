@@ -126,7 +126,7 @@ CPython 3.12, Apple Silicon, `perf_counter_ns`, 20,000 iterations:
 | `EnergyVAD.process_chunk` 16 kHz | 4.0 µs | 5.1 µs |
 | `EnergyVAD.process_chunk` 48 kHz | 10.6 µs | 12.2 µs |
 | `decode_client_message` (`vad.config`) | 2.3 µs | 2.9 µs |
-| VAD-triggered barge-in to `DRAINING` | asserted median < 100 µs in `test_vad_bridge.py` |
+| VAD-triggered barge-in to `DRAINING` | asserted median < 100 µs untraced, < 500 µs under coverage (CI), every sample < 15 ms, in `test_vad_bridge.py` |
 
 The whole ingress path (decode, checks, ring, VAD) costs about 10 µs per 20 ms frame,
 or 0.05 % of one core per call at 16 kHz.
