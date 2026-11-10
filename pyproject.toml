@@ -123,6 +123,7 @@ addopts = [
     "--import-mode=importlib",
     "--disable-socket",
     "--allow-unix-socket", # asyncio's self-pipe is an AF_UNIX socketpair; no AF_INET/AF_INET6
+    "--basetemp=.cache/pytest/basetemp", # tmp_path stays in the project, never the system temp dir
     "--cov=voice_ai_realtime_gateway",
     "--cov-branch",
     "--cov-report=term-missing:skip-covered",
@@ -133,6 +134,7 @@ asyncio_default_fixture_loop_scope = "function"
 asyncio_default_test_loop_scope = "function"
 xfail_strict = true
 filterwarnings = ["error"]
+faulthandler_timeout = 120 # a test still running after 120 s dumps every thread's stack
 
 # --------------------------------------------------------------------------- #
 # coverage

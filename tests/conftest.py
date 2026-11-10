@@ -45,6 +45,18 @@ settings.register_profile(
 )
 settings.load_profile(os.environ.get("VOICE_GATEWAY_HYPOTHESIS_PROFILE", "gateway"))
 
+
+def pytest_configure(config: pytest.Config) -> None:
+    """Create the parent of ``--basetemp`` (pytest only creates the leaf).
+
+    ``--basetemp=.cache/pytest/basetemp`` keeps ``tmp_path`` inside the project; without
+    this hook it fails on a fresh clone or in a mutation workspace, where
+    ``.cache/pytest/`` does not exist yet.
+    """
+    basetemp = config.option.basetemp
+    if basetemp:
+        Path(basetemp).parent.mkdir(parents=True, exist_ok=True)
+
 FRAME_NS = 20_000_000
 """20 ms media frames."""
 
