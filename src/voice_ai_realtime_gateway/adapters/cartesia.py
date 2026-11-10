@@ -262,12 +262,18 @@ class _Aligner:
 
 @final
 class _Framer:
-    """Cuts a PCM byte stream into exact frames, slicing without copies when possible."""
+    """Cuts a PCM byte stream into exact frames, slicing without copies when possible.
 
-    __slots__ = ("_frame_bytes", "_pending")
+    ``sample_frame_bytes`` is one interleaved sample frame (sample width x channels):
+    the flushed remainder is trimmed to a multiple of it, so a stereo tail never ends
+    mid-frame (``AudioFrame`` rejects a PCM16 payload that does).
+    """
 
-    def __init__(self, frame_bytes: int) -> None:
+    __slots__ = ("_frame_bytes", "_pending", "_sample_frame_bytes")
+
+    def __init__(self, frame_bytes: int, sample_frame_bytes: int = _SAMPLE_BYTES) -> None:
         self._frame_bytes = frame_bytes
+        self._sample_frame_bytes = sample_frame_bytes
         self._pending = bytearray()
 
     def feed(self, data: bytes) -> list[memoryview]:
@@ -288,7 +294,7 @@ class _Framer:
         return frames
 
     def flush(self) -> memoryview | None:
-        whole = len(self._pending) - len(self._pending) % _SAMPLE_BYTES
+        whole = len(self._pending) - len(self._pending) % self._sample_frame_bytes
         remainder = bytes(self._pending[:whole])
         self._pending.clear()
         return memoryview(remainder) if remainder else None
@@ -396,7 +402,8 @@ class CartesiaStreamingTTS:
         self, connection: WebSocketConnection, text: str, context_id: str, stamper: FrameStamper
     ) -> AsyncGenerator[SynthesizedAudio, None]:
         rate = stamper.sample_rate_hz
-        framer = _Framer(rate * self._frame_ms // 1000 * _SAMPLE_BYTES * stamper.channels)
+        sample_frame_bytes = _SAMPLE_BYTES * stamper.channels
+        framer = _Framer(rate * self._frame_ms // 1000 * sample_frame_bytes, sample_frame_bytes)
         aligner = _Aligner(text)
         frame_ns = self._frame_ms * 1_000_000
         media_ns = 0

@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import base64
 import contextlib
+import itertools
 import json
 from typing import TYPE_CHECKING
 
@@ -25,12 +26,12 @@ from voice_ai_realtime_gateway.adapters.cartesia import (
 from voice_ai_realtime_gateway.adapters.resilience import ErrorKind, RetryPolicy, UpstreamError
 from voice_ai_realtime_gateway.inference.ports import FrameStamper
 from voice_ai_realtime_gateway.telemetry.events import ProviderError
+from voice_ai_realtime_gateway.telemetry.ids import TraceContext
 
 if TYPE_CHECKING:
     from collections.abc import Awaitable, Callable
 
     from voice_ai_realtime_gateway.inference.ports import SynthesizedAudio
-    from voice_ai_realtime_gateway.telemetry.ids import TraceContext
     from voice_ai_realtime_gateway.telemetry.sink import FlightRecorder
     from voice_ai_realtime_gateway.transport.memory import MemoryWebSocket
 
@@ -208,6 +209,65 @@ def test_framer_trims_a_dangling_byte_and_flushes_nothing_when_empty() -> None:
     remainder = framer.flush()
     assert remainder is None, "a single dangling byte is not a sample"
     assert framer.flush() is None
+
+
+def test_framer_flush_keeps_whole_interleaved_stereo_sample_frames() -> None:
+    framer = _Framer(16, sample_frame_bytes=4)  # 4 stereo PCM16 sample frames per frame
+    assert [bytes(f) for f in framer.feed(bytes(range(22)))] == [bytes(range(16))]
+    remainder = framer.flush()
+    assert remainder is not None
+    assert bytes(remainder) == bytes(range(16, 20)), "1.5 trailing sample frames -> 1"
+
+
+async def test_stereo_tail_is_trimmed_to_whole_sample_frames(
+    recorder: FlightRecorder, trace: TraceContext
+) -> None:
+    async def stereo_with_ragged_tail(
+        ws: MemoryWebSocket, _c: int, _n: int, request: dict[str, object]
+    ) -> bool:
+        context = str(request["context_id"])
+        await ws.send(chunk(context, bytes(1290)))  # 1280-byte frame + 2.5 sample frames
+        await ws.send(done(context))
+        return True
+
+    provider = cartesia(stereo_with_ragged_tail)
+    adapter = tts(provider, recorder, trace)
+    stamper = FrameStamper(trace, channels=2)
+    audio = [a async for a in adapter.synthesize("Hi.", stamper)]
+    assert [a.frame.nbytes for a in audio] == [1280, 8]
+    assert all(a.frame.channels == 2 for a in audio)
+    assert audio[-1].frame.duration_ns == 2 * 1_000_000_000 // 16_000, "2 sample frames"
+    await adapter.aclose()
+    await provider.finish()
+
+
+@given(
+    data=st.binary(max_size=600),
+    cuts=st.lists(st.integers(min_value=0, max_value=600), max_size=12),
+    channels=st.sampled_from([1, 2]),
+    samples_per_frame=st.integers(min_value=1, max_value=40),
+)
+def test_framing_is_lossless_and_sample_aligned_for_any_chunking(
+    data: bytes, cuts: list[int], channels: int, samples_per_frame: int
+) -> None:
+    sample_frame = 2 * channels
+    frame_bytes = samples_per_frame * sample_frame
+    framer = _Framer(frame_bytes, sample_frame_bytes=sample_frame)
+    bounds = [0, *sorted(c for c in cuts if c <= len(data)), len(data)]
+    frames = [
+        bytes(f) for start, end in itertools.pairwise(bounds) for f in framer.feed(data[start:end])
+    ]
+    remainder = framer.flush()
+    tail = b"" if remainder is None else bytes(remainder)
+
+    assert all(len(f) == frame_bytes for f in frames), "every streamed frame is exact"
+    assert len(tail) < frame_bytes
+    assert len(tail) % sample_frame == 0, "the tail never ends mid sample frame"
+    usable = len(data) - len(data) % sample_frame
+    assert b"".join(frames) + tail == data[:usable], "nothing lost, duplicated or reordered"
+    stamper = FrameStamper(TraceContext.new(), channels=channels)
+    for payload in [*frames, *([tail] if tail else [])]:
+        assert stamper.stamp(memoryview(payload), duration_ns=1).nbytes == len(payload)
 
 
 # ------------------------------------------------------------------------ resilience
