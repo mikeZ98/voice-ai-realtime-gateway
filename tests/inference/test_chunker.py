@@ -6,7 +6,7 @@ import re
 import time
 
 import pytest
-from hypothesis import given, settings
+from hypothesis import example, given, settings
 from hypothesis import strategies as st
 
 from voice_ai_realtime_gateway.inference.chunker import ChunkerConfig, SentenceChunker
@@ -191,6 +191,12 @@ def squash(text: str) -> str:
 
 @settings(max_examples=400)
 @given(text=texts, config=configs, pieces=st.lists(st.integers(min_value=0, max_value=9)))
+# regression: an abbreviation verdict computed before an overflow cut moved the unit start
+@example(
+    text="Hello,e.g. .",
+    config=ChunkerConfig(max_chars=4, first_clause_min_chars=1, clause_min_chars=1),
+    pieces=[9],
+)
 def test_units_are_independent_of_token_splitting(
     text: str, config: ChunkerConfig, pieces: list[int]
 ) -> None:

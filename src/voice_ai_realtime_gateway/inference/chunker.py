@@ -130,7 +130,11 @@ class SentenceChunker:
         units: list[str] = []
         while True:
             cut: int | None = None
-            while index < length:
+            # Never scan past the cap: a boundary there is overflow-cut anyway, and its
+            # verdict would be computed against a ``start`` that the overflow cut is about
+            # to move (abbreviation words are clipped at ``start``) -- the same text split
+            # into other tokens would then see a different verdict.
+            while index < min(length, start + max_chars):
                 end = self._boundary(buffer, index, start)
                 if end == _WAIT:
                     break
