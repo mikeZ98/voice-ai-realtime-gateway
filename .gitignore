@@ -41,3 +41,6 @@ htmlcov/
 *.swp
 *.swo
 .DS_Store
+# pnew — secrets + SSD isolation
+.env
+.direnv/
